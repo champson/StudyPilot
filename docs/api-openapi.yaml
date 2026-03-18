@@ -900,6 +900,47 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /student/report/share:
+    post:
+      tags: [student-report]
+      operationId: studentReportShare
+      summary: 生成周报分享链接（学生视角）
+      description: |
+        生成带过期时间的 JWT 签名分享链接。分享内容为脱敏摘要数据（不含排名、原始图片、完整问答）。
+        链接默认有效期 7 天。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                week:
+                  type: string
+                  example: "2026-W11"
+                  description: 要分享的周报期号（不传则分享最新周报）
+                expires_in_days:
+                  type: integer
+                  default: 7
+                  minimum: 1
+                  maximum: 30
+      responses:
+        "200":
+          description: 分享链接生成成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  share_url:
+                    type: string
+                    example: "https://api.studypilot.example.com/api/v1/share/eyJhbGci..."
+                  expires_at:
+                    type: string
+                    format: date-time
+                  share_token:
+                    type: string
+
   /student/report/weekly/summary:
     get:
       tags: [student-report]
@@ -1808,9 +1849,19 @@ components:
           type: string
         reasons:
           type: array
+          description: 推荐原因标签，严格枚举（对应 PriorityFactor）
           items:
             type: string
-          description: 推荐原因标签（如 ["今日校内同步", "近期反复错误"]）
+            enum:
+              - 今日校内同步
+              - 今日错误较多
+              - 明日任务/测验
+              - 近期反复错误
+              - 本周覆盖不足
+              - 本周错题修复
+              - 薄弱知识点待修复
+              - 考试临近
+              - 最近成绩下滑
 
     PlanTask:
       type: object
@@ -1838,6 +1889,7 @@ components:
         status:
           type: string
           enum: [pending, entered, executed, completed]
+          description: "任务状态。允许从任意状态直接跳到 completed（向前跳跃）；禁止逆向回退（如 completed→entered）。"
         started_at:
           type: string
           format: date-time
@@ -1874,6 +1926,9 @@ components:
           enum: [pending, processing, completed, failed]
         is_manual_corrected:
           type: boolean
+        original_url:
+          type: string
+          description: OSS 原始文件 URL（学生只读）
         created_at:
           type: string
           format: date-time

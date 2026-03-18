@@ -96,6 +96,14 @@ page_size integer  每页条数，默认 20，最大 100
 | `500 Internal Server Error` | 服务内部错误 |
 | `503 Service Unavailable` | LLM 服务不可用（降级）|
 
+### 1.6 软删除约定
+
+数据库对 `daily_plans`、`study_uploads`、`error_book` 使用 `is_deleted` 字段实现软删除。
+
+- **所有列表 API 默认只返回 `is_deleted = false` 的记录**，无需调用方传参。
+- 学生端不提供删除接口（无 DELETE 端点），`is_deleted` 由管理员后台操作使用。
+- 管理员通过后台将记录标记为已删除，操作不可逆（当前版本无恢复接口）。
+
 ---
 
 ## 2. 认证机制
@@ -351,7 +359,7 @@ interface AsyncTaskResponse {
 | `PLAN_GENERATION_FAILED` | 503 | 计划生成失败（LLM 不可用）|
 | `PLAN_NOT_FOUND` | 404 | 今日无计划 |
 | `PLAN_TASK_NOT_FOUND` | 404 | 任务不存在 |
-| `PLAN_INVALID_STATUS_TRANSITION` | 400 | 状态不可逆（如 completed→entered）|
+| `PLAN_INVALID_STATUS_TRANSITION` | 400 | 状态不合法（仅禁止逆向回退，如 completed→entered；允许从任意状态直接跳到 completed）|
 | `PLAN_INVALID_MODE` | 400 | 模式值非法 |
 | `PLAN_ALREADY_EXISTS` | 409 | 今日计划已存在（需 force_regenerate）|
 
@@ -499,6 +507,28 @@ export type RunMode = "normal" | "best";
 
 export type CorrectionTargetType = "ocr" | "knowledge" | "plan" | "qa";
 
+// 推荐原因标签：严格枚举，复用 architecture_design.md PriorityFactor 定义
+// 工作日模式因素
+export type PriorityFactor =
+  | "今日校内同步"
+  | "今日错误较多"
+  | "明日任务/测验"
+  | "近期反复错误"
+  | "本周覆盖不足"
+  // 周末模式因素
+  | "本周错题修复"
+  | "薄弱知识点待修复"
+  | "考试临近"
+  | "最近成绩下滑";
+
+// 知识点状态变更触发类型（与 student_knowledge_status.last_update_reason 值一致）
+export type TriggerType =
+  | "quiz_correct"
+  | "quiz_wrong"
+  | "recall_success"
+  | "recall_fail"
+  | "manual";
+
 // ============================================================
 // 认证
 // ============================================================
@@ -569,7 +599,7 @@ export interface DailyPlan {
   source: PlanSource;
   is_history_inferred: boolean;
   recommended_subjects: RecommendedSubject[];
-  tasks: PlanTask[];
+  tasks: PlanTask[];        // 任务列表，从 plan_tasks 表读取；数据库的 plan_content JSONB 是后端内部字段，不暴露给 API
   status: PlanStatus;
   warning: string | null;
   created_at: string;
@@ -578,7 +608,7 @@ export interface DailyPlan {
 export interface RecommendedSubject {
   subject_id: number;
   subject_name: string;
-  reasons: string[];
+  reasons: PriorityFactor[];  // 严格枚举，前端可据此做本地化/样式化处理
 }
 
 export interface PlanTask {
@@ -610,13 +640,14 @@ export interface TaskContent {
 export interface StudyUpload {
   id: number;
   upload_type: UploadType;
-  file_hash: string;
+  original_url: string;       // OSS 原始文件 URL（学生只读，权限矩阵 §3）
   thumbnail_url: string | null;
   subject_id: number | null;
   subject_name: string | null;
   ocr_status: OcrStatus;
   is_manual_corrected: boolean;
   created_at: string;
+  // file_hash 是服务端内部字段，不通过 API 暴露
 }
 
 export interface OcrStatusResponse {
@@ -1094,12 +1125,18 @@ export interface SessionSummary {
 }
 ```
 
-**错误响应 `400`（状态回退）：**
+**任务状态机规则：**
+
+- 允许向前跳跃：`pending → completed`（学生可跳过中间步骤直接完成）
+- 允许逐步推进：`pending → entered → executed → completed`
+- **禁止逆向回退**：已进入 `completed` 后不可回退到任何前置状态
+
+**错误响应 `400`（状态逆向回退）：**
 ```json
 {
   "error": {
     "code": "PLAN_INVALID_STATUS_TRANSITION",
-    "message": "任务状态只能单向推进，不可从 completed 回退到 entered",
+    "message": "任务状态不可回退，不可从 completed 切换到 entered",
     "detail": {
       "current_status": "completed",
       "requested_status": "entered",
@@ -1187,6 +1224,46 @@ subject_id:  2
 
 > **前端轮询策略**：每 3 秒轮询一次，最多 20 次（60 秒超时）。
 > 超时后展示"识别超时，请稍后刷新"，不自动重试。
+
+#### `POST /student/material/{id}/retry-ocr`
+
+OCR 失败后，学生手动触发重试（仅当 `ocr_status=failed` 且重试次数未超上限时有效）。
+
+**请求体：** 无（空 JSON `{}`）
+
+**成功响应 `202`：**
+```json
+{
+  "data": {
+    "resource_id": 456,
+    "status": "pending",
+    "poll_url": "/api/v1/student/material/456/ocr-status",
+    "message": "已重新提交识别任务，请稍后查询结果"
+  }
+}
+```
+
+**错误响应 `400`（原状态非 failed）：**
+```json
+{
+  "error": {
+    "code": "UPLOAD_OCR_NOT_FAILED",
+    "message": "当前 OCR 状态为 processing，无需重试",
+    "detail": { "current_ocr_status": "processing" }
+  }
+}
+```
+
+**错误响应 `400`（超过最大重试次数）：**
+```json
+{
+  "error": {
+    "code": "UPLOAD_OCR_MAX_RETRY_EXCEEDED",
+    "message": "已超过最大重试次数（3次），请联系管理员处理",
+    "detail": { "retry_count": 3, "max_retries": 3 }
+  }
+}
+```
 
 ---
 
@@ -1393,6 +1470,34 @@ GET /student/knowledge/status?subject_id=2&status=反复失误&min_importance=0.
   }
 }
 ```
+
+### 6.7 学生端生成分享链接
+
+#### `POST /student/report/share`
+
+学生可从自己的周报页生成分享链接（权限矩阵 §6 学生对"生成分享链接"有 ✅ 权限）。
+生成的链接内容与家长端生成的一致，均通过 `SHARE_OMIT_FIELDS` 过滤敏感字段。
+
+**请求体：**
+```json
+{
+  "week": "2026-W11",
+  "expires_in_days": 7
+}
+```
+
+**成功响应 `200`：**
+```json
+{
+  "data": {
+    "share_url": "https://api.studypilot.example.com/api/v1/share/eyJhbGciOiJIUzI1NiJ9...",
+    "expires_at": "2026-03-25T23:59:59+08:00",
+    "share_token": "eyJhbGciOiJIUzI1NiJ9..."
+  }
+}
+```
+
+> 生成的分享内容同 §8，不包含排名、原始图片、完整问答记录。
 
 ---
 

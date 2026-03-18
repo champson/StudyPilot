@@ -86,7 +86,7 @@ erDiagram
         int student_id FK "→ student_profiles.id"
         int knowledge_point_id FK "→ knowledge_tree.id"
         varchar status "未观察|初步接触|需要巩固|基本掌握|反复失误"
-        varchar last_update_reason
+        varchar last_update_reason "镜像 knowledge_update_logs.trigger_type 值（quiz_correct|quiz_wrong|recall_success|recall_fail|manual）"
         timestamptz last_updated_at
         boolean is_manual_corrected
     }
@@ -129,6 +129,7 @@ erDiagram
         varchar task_type "lecture|practice|error_review|consolidation"
         jsonb task_content "任务详情"
         int sequence "任务顺序"
+        int estimated_minutes "Planning Agent 生成时预计时长"
         varchar status "pending|entered|executed|completed"
         timestamptz started_at
         timestamptz completed_at
@@ -144,7 +145,7 @@ erDiagram
         int student_id FK "→ student_profiles.id"
         boolean is_deleted "软删除标记"
         varchar upload_type "note|homework|test|handout|score"
-        varchar file_hash "SHA256/MD5 文件哈希，用于秒传"
+        varchar file_hash "SHA256 文件哈希，服务端写入后计算（MVP 不实现秒传，仅用于去重存储）"
         varchar original_url "OSS 原始文件 URL"
         varchar thumbnail_url
         jsonb ocr_result "OCR 结构化结果"
@@ -349,6 +350,12 @@ erDiagram
 | `importance_score` | DECIMAL(5,4) | `freq×0.4 + score_weight×0.4 + syllabus_weight×0.2`，归一化到 0-1 |
 | `exam_frequency` | INTEGER | 近 5 年（2020-2024）上海高考出现次数 |
 | `syllabus_level` | VARCHAR | 了解(0.3) / 理解(0.6) / 掌握(1.0)，参与加权 |
+
+### `student_knowledge_status.last_update_reason` — 与 `trigger_type` 的关系
+
+`last_update_reason` 直接取 `knowledge_update_logs.trigger_type` 的值（枚举：`quiz_correct` / `quiz_wrong` / `recall_success` / `recall_fail` / `manual`）。每次写入知识点状态时，同步更新此字段，避免前端查询日志表。
+
+---
 
 ### `student_knowledge_status` — 状态值域
 

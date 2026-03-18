@@ -465,7 +465,9 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
           ▼
 ┌───────────────────┐
 │ 4. 检查新上传内容  │  ← study_uploads 表
-│    Extraction     │     若有新上传触发 OCR
+│    Extraction     │     若有新上传触发 OCR（异步）
+│                   │     OCR 完成不自动重新生成计划
+│                   │     学生需手动点"重新生成计划"
 └─────────┬─────────┘
           │
           ▼
@@ -583,6 +585,10 @@ async def generate_plan_with_fallback(
             available_minutes=available_minutes,
             warning="连续7天未上传新内容，建议补充上传以恢复个性化准确度"
         )
+
+    # 恢复条件：只要有新上传（has_today_input=True），即视为恢复个性化计划（source=upload_corrected）。
+    # 无需连续多天上传，单次上传 + OCR 完成后，学生手动点击"重新生成计划"即可恢复。
+    # 计划不会在 OCR 完成时自动重新生成，需由学生主动触发。
     
     # 调用 Planning Agent 生成计划
     plan = await planning_agent.generate(
@@ -816,7 +822,14 @@ class SubjectRiskLevel(str, Enum):
 @shared_task
 def aggregate_weekly_subject_risk():
     """
-    每周日晚执行，汇总学科风险状态。
+    每周日晚（23:30 Asia/Shanghai）执行，汇总学科风险状态并生成当周周报快照。
+
+    首次使用说明：
+    - 新学生在第一个周日前不会有周报快照（weekly_reports 表无记录）。
+    - 家长端 / 学生端访问周报时，若 weekly_reports 无该周记录，
+      API 返回 404（REPORT_NOT_FOUND），前端显示"本周报告尚未生成"。
+    - 补生成接口：POST /admin/report/generate（仅管理员），
+      支持手动触发指定学生指定周的周报生成，供测试和补漏使用。
 
     注意：Celery worker 在同步上下文中运行。若底层 DB 操作使用
     SQLAlchemy 2.0 async，必须通过 asyncio.run() 桥接，否则会
@@ -1126,6 +1139,7 @@ POST   /api/v1/student/errors/batch-recall       # 批量错题召回
 GET    /api/v1/student/knowledge/status          # 获取知识点掌握状态
 GET    /api/v1/student/report/weekly             # 获取周报（学生视角）
 GET    /api/v1/student/report/weekly/summary     # 获取周报概览
+POST   /api/v1/student/report/share             # 生成分享链接（学生端）
 
 GET    /api/v1/config/textbook-versions          # 获取教材版本列表
 ```
@@ -1313,7 +1327,7 @@ CREATE TABLE daily_plans (
     source VARCHAR(30) NOT NULL,                   -- upload_corrected/history_inferred/manual_adjusted/generic_fallback
     is_history_inferred BOOLEAN DEFAULT false,
     recommended_subjects JSONB NOT NULL,           -- [{subject_id, reasons: [...]}]
-    plan_content JSONB NOT NULL,                   -- 完整计划 JSON
+    plan_content JSONB NOT NULL,                   -- Planning Agent 原始完整输出，后端内部存储，不通过 API 暴露（API 使用 plan_tasks 表返回 tasks[]）
     status VARCHAR(20) NOT NULL DEFAULT 'generated', -- generated/in_progress/completed
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(student_id, plan_date)
@@ -1329,10 +1343,11 @@ CREATE TABLE plan_tasks (
     task_type VARCHAR(50) NOT NULL,                -- lecture/practice/error_review/consolidation
     task_content JSONB NOT NULL,                   -- 任务详情
     sequence INTEGER NOT NULL,                     -- 任务顺序
+    estimated_minutes INTEGER,                     -- Planning Agent 生成时预计时长（分钟）
     status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending/entered/executed/completed
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
-    duration_minutes INTEGER
+    duration_minutes INTEGER                       -- 学生实际用时（任务完成后填写）
 );
 
 CREATE INDEX idx_plan_tasks_plan ON plan_tasks(plan_id);
@@ -1347,7 +1362,7 @@ CREATE TABLE study_uploads (
     student_id INTEGER NOT NULL REFERENCES student_profiles(id),
     is_deleted BOOLEAN NOT NULL DEFAULT false,
     upload_type VARCHAR(30) NOT NULL,              -- note/homework/test/handout/score
-    file_hash VARCHAR(64) NOT NULL,                -- 文件的 SHA256/MD5，用于上传秒传与防重复 OCR
+    file_hash VARCHAR(64) NOT NULL,                -- 服务端写入 OSS 后计算的 SHA256，MVP 不实现秒传，仅用于去重存储
     original_url VARCHAR(500) NOT NULL,            -- OSS 原始文件 URL
     thumbnail_url VARCHAR(500),                    -- 缩略图 URL
     ocr_result JSONB,                              -- OCR 结构化结果
@@ -1501,6 +1516,12 @@ CREATE INDEX idx_model_logs_created ON model_call_logs(created_at DESC);
 CREATE INDEX idx_model_logs_agent ON model_call_logs(agent_name, created_at DESC);
 
 -- 人工纠偏记录表
+-- target_id 是跨表引用（target_type 决定其所属表），数据库层面无外键约束。
+-- 应用层写入时必须根据 target_type 校验 target_id 存在于对应表：
+--   ocr      → study_uploads.id
+--   knowledge → student_knowledge_status.id
+--   plan     → daily_plans.id
+--   qa       → qa_sessions.id
 CREATE TABLE manual_corrections (
     id SERIAL PRIMARY KEY,
     target_type VARCHAR(50) NOT NULL,              -- ocr/knowledge/plan/qa
