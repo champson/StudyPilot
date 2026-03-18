@@ -1,0 +1,2682 @@
+openapi: 3.0.3
+info:
+  title: AI高考伴学教练 API
+  description: |
+    StudyPilot — 面向上海高中生的个性化 AI 学习辅导系统 API 规范。
+
+    ## 认证方式
+
+    系统使用 Bearer Token 认证。不同角色通过不同接口获取 Token：
+    - **学生/家长**：`POST /api/v1/auth/token-login`
+    - **管理员**：`POST /api/v1/auth/admin-login`
+
+    分享链接通过 JWT 签名 URL 访问，无需登录。
+
+    ## 角色与权限
+
+    | 角色 | Token 类型 | 权限范围 |
+    |------|-----------|---------|
+    | `student` | Bearer Token | 本人数据读写 |
+    | `parent` | Bearer Token (含 student_id 绑定) | 关联学生的报告查看 |
+    | `admin` | Bearer Token (admin role) | 纠偏、模式切换、监控 |
+    | `share` | JWT 签名 URL (via token path param) | 脱敏摘要只读 |
+
+    ## 统一错误格式
+
+    所有错误响应遵循以下格式：
+    ```json
+    {
+      "error": {
+        "code": "ONBOARDING_NOT_COMPLETED",
+        "message": "请先完成入学问卷",
+        "detail": {}
+      }
+    }
+    ```
+
+    ## 运行模式
+
+    系统支持两种运行模式（由管理员切换）：
+    - `normal`：正常效果模式，以国产模型为主，成本较低
+    - `best`：最优效果模式，使用 GPT-4o/Claude，效果最佳
+
+  version: "1.0.0"
+  contact:
+    name: StudyPilot Team
+
+servers:
+  - url: https://api.studypilot.example.com/api/v1
+    description: 生产环境
+  - url: http://localhost:8000/api/v1
+    description: 本地开发环境
+
+tags:
+  - name: auth
+    description: 认证（登录/Token）
+  - name: student-profile
+    description: 学生档案与入学问卷
+  - name: student-plan
+    description: 每日学习计划
+  - name: student-upload
+    description: 学习材料上传与 OCR
+  - name: student-qa
+    description: 实时答疑
+  - name: student-errors
+    description: 错题本管理
+  - name: student-report
+    description: 周报（学生视角）
+  - name: student-knowledge
+    description: 知识点掌握状态
+  - name: parent
+    description: 家长端（周报、风险、趋势）
+  - name: share
+    description: 分享链接（脱敏只读）
+  - name: admin-corrections
+    description: 管理端 — 人工纠偏
+  - name: admin-metrics
+    description: 管理端 — 系统监控
+  - name: admin-system
+    description: 管理端 — 系统配置
+  - name: config
+    description: 公共配置数据
+
+security:
+  - BearerAuth: []
+
+paths:
+
+  # ============================================================
+  # 认证 API
+  # ============================================================
+
+  /auth/token-login:
+    post:
+      tags: [auth]
+      summary: 学生/家长 Token 登录
+      description: 使用预分配的简单 Token 登录，返回 JWT。首次使用时创建用户记录。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, role]
+              properties:
+                token:
+                  type: string
+                  description: 预分配的访问 Token（运营者线下分发）
+                  example: "student_abc123"
+                role:
+                  type: string
+                  enum: [student, parent]
+                  description: 登录角色
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/admin-login:
+    post:
+      tags: [auth]
+      summary: 管理员账号密码登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  example: "admin"
+                password:
+                  type: string
+                  format: password
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ============================================================
+  # 学生端 — 档案与入学问卷
+  # ============================================================
+
+  /student/profile:
+    post:
+      tags: [student-profile]
+      summary: 创建学生档案（首次建档）
+      description: 新学生首次使用时调用，创建 student_profiles 记录。建档后需完成入学问卷。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProfileRequest"
+      responses:
+        "201":
+          description: 档案创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentProfile"
+        "409":
+          description: 档案已存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    get:
+      tags: [student-profile]
+      summary: 获取学生档案
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentProfile"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [student-profile]
+      summary: 更新学生信息
+      description: 更新年级、教材版本、选科等可变信息。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StudentProfile"
+
+  /student/onboarding/submit:
+    post:
+      tags: [student-profile]
+      summary: 提交入学问卷（冷启动）
+      description: |
+        首次必填。问卷完成后系统自动：
+        1. 调用 `state_initializer.py` 写入初始知识点状态
+        2. 将 `onboarding_completed` 更新为 `true`
+        3. 解锁今日计划生成功能
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardingSubmitRequest"
+      responses:
+        "200":
+          description: 问卷提交成功，初始状态已生成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  onboarding_completed:
+                    type: boolean
+                    example: true
+                  initialized_knowledge_points:
+                    type: integer
+                    description: 本次初始化的知识点状态数量
+                    example: 42
+                  initialized_subject_risks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        subject_code:
+                          type: string
+                        risk_level:
+                          type: string
+        "400":
+          description: 问卷数据不合法
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: 问卷已完成，不可重复提交
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /student/onboarding/status:
+    get:
+      tags: [student-profile]
+      summary: 查询入学问卷完成状态
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  onboarding_completed:
+                    type: boolean
+                  completed_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+
+  # ============================================================
+  # 学生端 — 每日学习计划
+  # ============================================================
+
+  /student/plan/generate:
+    post:
+      tags: [student-plan]
+      summary: 生成今日计划
+      description: |
+        触发 Planning Agent 生成今日个性化学习计划。
+        - 若 `onboarding_completed=false`，返回 400 并引导完成问卷
+        - 若今日已有计划，默认返回已有计划；传 `force_regenerate=true` 可重新生成
+        - 计划来源（source）：`upload_corrected` / `history_inferred` / `generic_fallback`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [available_minutes]
+              properties:
+                available_minutes:
+                  type: integer
+                  minimum: 10
+                  maximum: 480
+                  description: 今日可用学习时间（分钟）
+                  example: 90
+                learning_mode:
+                  type: string
+                  enum: [workday_follow, weekend_review]
+                  description: 学习模式（不传时系统根据日期推荐）
+                force_regenerate:
+                  type: boolean
+                  default: false
+                  description: 强制重新生成（今日已有计划时使用）
+      responses:
+        "200":
+          description: 计划生成成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyPlan"
+        "400":
+          description: 入学问卷未完成或参数不合法
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                onboarding_required:
+                  value:
+                    error:
+                      code: "ONBOARDING_NOT_COMPLETED"
+                      message: "请先完成入学问卷"
+
+  /student/plan/today:
+    get:
+      tags: [student-plan]
+      summary: 获取今日计划
+      description: 获取当天已生成的计划。若今日无计划，返回 404。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyPlan"
+        "404":
+          description: 今日暂无计划，请先生成
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /student/plan/mode:
+    patch:
+      tags: [student-plan]
+      summary: 切换今日学习模式
+      description: 学生手动切换当日学习模式（工作日跟学 / 周末复习）。切换后计划自动重新生成。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [learning_mode]
+              properties:
+                learning_mode:
+                  type: string
+                  enum: [workday_follow, weekend_review]
+      responses:
+        "200":
+          description: 模式切换成功，返回新计划
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyPlan"
+
+  /student/plan/tasks/{taskId}:
+    patch:
+      tags: [student-plan]
+      summary: 更新任务状态
+      description: 学生更新任务完成状态。状态只能单向推进：pending → entered → executed → completed。
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [entered, executed, completed]
+                  description: 新任务状态
+                duration_minutes:
+                  type: integer
+                  description: 实际用时（completed 状态时填写）
+      responses:
+        "200":
+          description: 状态更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlanTask"
+        "400":
+          description: 状态转换不合法
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ============================================================
+  # 学生端 — 学习材料上传与 OCR
+  # ============================================================
+
+  /student/material/upload:
+    post:
+      tags: [student-upload]
+      summary: 上传学习材料
+      description: |
+        上传笔记/作业/试卷等图片或文件。上传后异步触发 OCR（Celery 任务）。
+        返回 `upload_id` 和初始 `ocr_status=pending`，客户端通过轮询接口获取结果。
+
+        **轮询策略**：每 3 秒轮询一次 `/material/{id}/ocr-status`，最多 20 次（60 秒超时）。
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, upload_type]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 图片或 PDF 文件（最大 20MB）
+                upload_type:
+                  type: string
+                  enum: [note, homework, test, handout, score]
+                  description: 上传类型（笔记/作业/试卷/讲义/成绩单）
+                subject_id:
+                  type: integer
+                  description: 手动指定学科（OCR 前兜底，可选）
+      responses:
+        "202":
+          description: 上传成功，OCR 处理中
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id:
+                    type: integer
+                    example: 456
+                  ocr_status:
+                    type: string
+                    enum: [pending]
+                    example: "pending"
+                  message:
+                    type: string
+                    example: "文件已上传，正在识别中，请稍后查询结果"
+        "400":
+          description: 文件格式不支持或超过大小限制
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /student/material/list:
+    get:
+      tags: [student-upload]
+      summary: 获取上传历史列表
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: upload_type
+          in: query
+          schema:
+            type: string
+            enum: [note, homework, test, handout, score]
+        - name: subject_id
+          in: query
+          schema:
+            type: integer
+        - name: ocr_status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed]
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedUploads"
+
+  /student/material/{id}/ocr-status:
+    get:
+      tags: [student-upload]
+      summary: 查询 OCR 状态
+      description: 轮询此接口获取 OCR 处理进度与结果。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OcrStatusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /student/material/{id}/retry-ocr:
+    post:
+      tags: [student-upload]
+      summary: 重试 OCR 识别
+      description: 当 OCR 失败时，学生可手动触发重试（最多重试 1 次）。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "202":
+          description: 重试任务已提交
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id:
+                    type: integer
+                  ocr_status:
+                    type: string
+                    example: "pending"
+        "400":
+          description: OCR 未失败或已超过重试次数
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ============================================================
+  # 学生端 — 实时答疑
+  # ============================================================
+
+  /student/qa/chat:
+    post:
+      tags: [student-qa]
+      summary: 发送答疑消息（非流式）
+      description: 发送问题并获取完整答复（适合简单问题或不支持流式的客户端）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+
+  /student/qa/chat/stream:
+    post:
+      tags: [student-qa]
+      summary: 流式答疑（SSE）
+      description: |
+        发送问题，以 Server-Sent Events 流式返回 AI 答复。
+
+        **事件格式**：
+        ```
+        data: {"type": "chunk", "content": "设函数 f(x)"}
+        data: {"type": "chunk", "content": " 的定义域为..."}
+        data: {"type": "knowledge_points", "data": [{"id": 42, "name": "函数的定义域"}]}
+        data: {"type": "strategy", "data": "hint"}
+        data: [DONE]
+        ```
+
+        流结束后，Assessment Agent 在后台异步评估本轮学习效果（不阻塞响应）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: SSE 流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events 流
+
+  /student/qa/history:
+    get:
+      tags: [student-qa]
+      summary: 获取答疑历史（会话列表）
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: subject_id
+          in: query
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedQaSessions"
+
+  /student/qa/sessions/{sessionId}:
+    get:
+      tags: [student-qa]
+      summary: 获取答疑会话详情（含消息列表）
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QaSessionDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ============================================================
+  # 学生端 — 错题本
+  # ============================================================
+
+  /student/errors:
+    get:
+      tags: [student-errors]
+      summary: 获取错题列表
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: subject_id
+          in: query
+          schema:
+            type: integer
+        - name: error_type
+          in: query
+          schema:
+            type: string
+            enum: [calc_error, concept_unclear, careless, unknown]
+        - name: is_recalled
+          in: query
+          schema:
+            type: boolean
+          description: 筛选已/未召回错题
+        - name: entry_reason
+          in: query
+          schema:
+            type: string
+            enum: [wrong, not_know, repeated_wrong]
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedErrors"
+
+  /student/errors/summary:
+    get:
+      tags: [student-errors]
+      summary: 获取错题概要统计
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorSummary"
+
+  /student/errors/{id}:
+    get:
+      tags: [student-errors]
+      summary: 获取错题详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBookItem"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /student/errors/{id}/recall:
+    post:
+      tags: [student-errors]
+      summary: 触发单题召回
+      description: 将错题加入当日计划的召回任务中。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: 召回任务已创建
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error_id:
+                    type: integer
+                  recall_scheduled:
+                    type: boolean
+                  message:
+                    type: string
+                    example: "已加入今日召回计划"
+
+  /student/errors/batch-recall:
+    post:
+      tags: [student-errors]
+      summary: 批量错题召回
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [error_ids]
+              properties:
+                error_ids:
+                  type: array
+                  items:
+                    type: integer
+                  maxItems: 20
+      responses:
+        "200":
+          description: 批量召回已提交
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scheduled_count:
+                    type: integer
+                  error_ids:
+                    type: array
+                    items:
+                      type: integer
+
+  # ============================================================
+  # 学生端 — 知识点状态
+  # ============================================================
+
+  /student/knowledge/status:
+    get:
+      tags: [student-knowledge]
+      summary: 获取知识点掌握状态
+      parameters:
+        - name: subject_id
+          in: query
+          schema:
+            type: integer
+          description: 按学科过滤
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [未观察, 初步接触, 需要巩固, 基本掌握, 反复失误]
+          description: 按状态过滤
+        - name: min_importance
+          in: query
+          schema:
+            type: number
+            format: float
+            minimum: 0
+            maximum: 1
+          description: 最低重要性分数过滤（如只看高频考点）
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  by_status:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                    example:
+                      未观察: 120
+                      初步接触: 30
+                      需要巩固: 15
+                      基本掌握: 25
+                      反复失误: 5
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/KnowledgeStatus"
+
+  # ============================================================
+  # 学生端 — 周报
+  # ============================================================
+
+  /student/report/weekly:
+    get:
+      tags: [student-report]
+      summary: 获取周报（学生视角，完整版）
+      parameters:
+        - name: week
+          in: query
+          schema:
+            type: string
+            pattern: '^\d{4}-W\d{2}$'
+            example: "2026-W11"
+          description: 周报期号（不传则返回最新周报）
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeeklyReportStudent"
+        "404":
+          description: 指定周报尚未生成
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /student/report/weekly/summary:
+    get:
+      tags: [student-report]
+      summary: 获取周报概览（轻量）
+      description: 返回本周核心指标，用于工作台顶部展示。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  week:
+                    type: string
+                    example: "2026-W11"
+                  usage_days:
+                    type: integer
+                  task_completion_rate:
+                    type: number
+                    format: float
+                  high_risk_subjects:
+                    type: array
+                    items:
+                      type: string
+                    description: 高风险学科名称列表
+
+  # ============================================================
+  # 公共配置
+  # ============================================================
+
+  /config/textbook-versions:
+    get:
+      tags: [config]
+      summary: 获取教材版本列表（各学科）
+      security: []
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: array
+                  items:
+                    type: string
+                example:
+                  math: ["人教A版", "人教B版", "北师大版"]
+                  physics: ["人教版", "沪科版"]
+                  chemistry: ["人教版", "苏教版"]
+
+  # ============================================================
+  # 家长端 API
+  # ============================================================
+
+  /parent/report/weekly:
+    get:
+      tags: [parent]
+      summary: 获取周报（家长视角）
+      description: |
+        家长视角周报，包含学习概览和学科风险，**不含**具体错题内容和完整问答记录。
+      parameters:
+        - name: week
+          in: query
+          schema:
+            type: string
+            pattern: '^\d{4}-W\d{2}$'
+            example: "2026-W11"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeeklyReportParent"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /parent/report/stage:
+    get:
+      tags: [parent]
+      summary: 获取阶段性报告（家长视角）
+      description: 跨多周的综合趋势报告。
+      parameters:
+        - name: weeks
+          in: query
+          schema:
+            type: integer
+            default: 4
+            minimum: 2
+            maximum: 12
+          description: 覆盖最近 N 周
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StageReportParent"
+
+  /parent/report/share:
+    post:
+      tags: [parent]
+      summary: 生成周报分享链接
+      description: |
+        生成带过期时间的 JWT 签名分享链接。分享内容为脱敏摘要数据（不含排名、原始图片、完整问答）。
+        链接默认有效期 7 天。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                week:
+                  type: string
+                  example: "2026-W11"
+                  description: 要分享的周报期号（不传则分享最新周报）
+                expires_in_days:
+                  type: integer
+                  default: 7
+                  minimum: 1
+                  maximum: 30
+      responses:
+        "200":
+          description: 分享链接生成成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  share_url:
+                    type: string
+                    example: "https://api.studypilot.example.com/api/v1/share/eyJhbGci..."
+                  expires_at:
+                    type: string
+                    format: date-time
+                  share_token:
+                    type: string
+
+  /parent/profile/risk:
+    get:
+      tags: [parent]
+      summary: 获取学科风险概览（4档）
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  week:
+                    type: string
+                  subjects:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SubjectRisk"
+
+  /parent/profile/trend:
+    get:
+      tags: [parent]
+      summary: 获取趋势数据（进步/退步描述）
+      parameters:
+        - name: weeks
+          in: query
+          schema:
+            type: integer
+            default: 4
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrendData"
+
+  /parent/profile/supplement:
+    post:
+      tags: [parent]
+      summary: 家长补录学生基础信息
+      description: 家长可补充/修正学生年级、选科等信息。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParentSupplementRequest"
+      responses:
+        "200":
+          description: 补录成功
+
+  /parent/exam/record:
+    post:
+      tags: [parent]
+      summary: 家长补录考试成绩
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExamRecordRequest"
+      responses:
+        "201":
+          description: 成绩已记录
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExamRecord"
+
+  # ============================================================
+  # 分享链接 API
+  # ============================================================
+
+  /share/{token}:
+    get:
+      tags: [share]
+      summary: 获取分享内容（脱敏摘要）
+      description: |
+        无需登录，通过 JWT Token 访问。返回的数据已脱敏，**不含**：
+        - 班级/年级排名
+        - 原始图片 URL
+        - 完整问答记录
+        - 完整错题本
+        - 管理员备注
+
+        `SHARE_OMIT_FIELDS` 在 `app/core/data_masking.py` 中统一定义。
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareContent"
+        "401":
+          description: Token 无效或已过期
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /share/{token}/validate:
+    get:
+      tags: [share]
+      summary: 验证分享链接有效性
+      description: 仅验证 Token 是否有效，不返回数据内容。
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 链接有效
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    example: true
+                  expires_at:
+                    type: string
+                    format: date-time
+        "401":
+          description: 链接无效或已过期
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ============================================================
+  # 管理端 — 系统配置
+  # ============================================================
+
+  /admin/system/mode:
+    get:
+      tags: [admin-system]
+      summary: 获取当前运行模式
+      description: 从 Redis（key: `system:run_mode`）读取当前模式，确保多进程一致。
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current_mode:
+                    type: string
+                    enum: [normal, best]
+                  switched_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  switched_by:
+                    type: string
+                    nullable: true
+
+    post:
+      tags: [admin-system]
+      summary: 切换运行模式
+      description: |
+        将模式写入 Redis（key: `system:run_mode`），同时更新 `config/model_config.yaml` 作为持久化备份。
+        所有运行中的 API/Worker/Beat 进程实时生效，无需重启。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [normal, best]
+                reason:
+                  type: string
+                  description: 切换原因（可选，记录日志）
+      responses:
+        "200":
+          description: 模式切换成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  previous_mode:
+                    type: string
+                  current_mode:
+                    type: string
+                  switched_at:
+                    type: string
+                    format: date-time
+
+  # ============================================================
+  # 管理端 — 人工纠偏
+  # ============================================================
+
+  /admin/corrections/pending:
+    get:
+      tags: [admin-corrections]
+      summary: 获取待处理纠偏列表
+      parameters:
+        - name: target_type
+          in: query
+          schema:
+            type: string
+            enum: [ocr, knowledge, plan, qa]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedCorrections"
+
+  /admin/corrections/logs:
+    get:
+      tags: [admin-corrections]
+      summary: 获取历史纠偏记录
+      parameters:
+        - name: target_type
+          in: query
+          schema:
+            type: string
+            enum: [ocr, knowledge, plan, qa]
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedCorrectionLogs"
+
+  /admin/corrections/{id}:
+    get:
+      tags: [admin-corrections]
+      summary: 获取纠偏项详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CorrectionItem"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/corrections/ocr:
+    post:
+      tags: [admin-corrections]
+      summary: 修正 OCR 识别结果
+      description: 人工修正 OCR 识别错误的内容，更新 `study_uploads.ocr_result` 并标记 `is_manual_corrected=true`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, corrected_content]
+              properties:
+                upload_id:
+                  type: integer
+                corrected_content:
+                  type: object
+                  description: 修正后的 OCR 结构化数据
+                correction_reason:
+                  type: string
+      responses:
+        "200":
+          description: 修正成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CorrectionResult"
+
+  /admin/corrections/knowledge:
+    post:
+      tags: [admin-corrections]
+      summary: 修正知识点标注
+      description: 修正 AI 自动标注的知识点，更新 `student_knowledge_status.is_manual_corrected=true`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_id, knowledge_point_id, new_status]
+              properties:
+                student_id:
+                  type: integer
+                knowledge_point_id:
+                  type: integer
+                new_status:
+                  type: string
+                  enum: [未观察, 初步接触, 需要巩固, 基本掌握, 反复失误]
+                correction_reason:
+                  type: string
+      responses:
+        "200":
+          description: 修正成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CorrectionResult"
+
+  /admin/corrections/plan:
+    post:
+      tags: [admin-corrections]
+      summary: 人工调整学习计划
+      description: 修正 Planning Agent 生成的不合理计划，覆写计划内容并标记来源为 `manual_adjusted`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_id, corrected_content]
+              properties:
+                plan_id:
+                  type: integer
+                corrected_content:
+                  type: object
+                  description: 修正后的计划 JSON
+                correction_reason:
+                  type: string
+      responses:
+        "200":
+          description: 修正成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CorrectionResult"
+
+  # ============================================================
+  # 管理端 — 系统监控
+  # ============================================================
+
+  /admin/metrics/today:
+    get:
+      tags: [admin-metrics]
+      summary: 今日概览数据
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TodayMetrics"
+
+  /admin/metrics/health:
+    get:
+      tags: [admin-metrics]
+      summary: 系统健康状态
+      responses:
+        "200":
+          description: 系统正常
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /admin/metrics/model-calls:
+    get:
+      tags: [admin-metrics]
+      summary: 模型调用统计（各 Agent 调用次数、延迟）
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+          description: 统计日期（不传则当天）
+        - name: agent_name
+          in: query
+          schema:
+            type: string
+            enum: [routing, extraction, planning, tutoring, assessment]
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCallStats"
+
+  /admin/metrics/costs:
+    get:
+      tags: [admin-metrics]
+      summary: 成本统计（元/天）
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 7
+            maximum: 30
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CostStats"
+
+  /admin/metrics/errors:
+    get:
+      tags: [admin-metrics]
+      summary: 错误统计
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorStats"
+
+  /admin/metrics/fallbacks:
+    get:
+      tags: [admin-metrics]
+      summary: 降级统计
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FallbackStats"
+
+  /admin/metrics/latency:
+    get:
+      tags: [admin-metrics]
+      summary: 延迟统计（P50/P95/P99）
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: agent_name
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LatencyStats"
+
+# ============================================================
+# 组件定义
+# ============================================================
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Bearer Token，通过 /auth/token-login 或 /auth/admin-login 获取"
+
+  responses:
+    Unauthorized:
+      description: 未认证或 Token 无效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "UNAUTHORIZED"
+              message: "请先登录"
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "NOT_FOUND"
+              message: "资源不存在"
+
+  schemas:
+
+    # ---------- 通用 ----------
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: 错误码（大写下划线风格）
+              example: "ONBOARDING_NOT_COMPLETED"
+            message:
+              type: string
+              description: 人类可读错误信息
+              example: "请先完成入学问卷"
+            detail:
+              type: object
+              description: 附加错误细节（可选）
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT Token
+        token_type:
+          type: string
+          example: "bearer"
+        expires_in:
+          type: integer
+          description: 过期秒数
+          example: 2592000
+        user:
+          type: object
+          properties:
+            id:
+              type: integer
+            role:
+              type: string
+              enum: [student, parent, admin]
+            nickname:
+              type: string
+            student_id:
+              type: integer
+              nullable: true
+              description: 关联学生 ID（parent/student 角色）
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+        total_pages:
+          type: integer
+
+    # ---------- 学生档案 ----------
+
+    CreateProfileRequest:
+      type: object
+      required: [grade]
+      properties:
+        grade:
+          type: string
+          enum: [高一, 高二, 高三]
+        textbook_version:
+          type: string
+        subject_combination:
+          type: array
+          items:
+            type: string
+          description: 选科组合（如 ["physics", "chemistry", "biology"]）
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        grade:
+          type: string
+          enum: [高一, 高二, 高三]
+        textbook_version:
+          type: string
+        subject_combination:
+          type: array
+          items:
+            type: string
+        upcoming_exams:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              date:
+                type: string
+                format: date
+
+    StudentProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: integer
+        grade:
+          type: string
+        textbook_version:
+          type: string
+          nullable: true
+        subject_combination:
+          type: array
+          items:
+            type: string
+        upcoming_exams:
+          type: array
+          items:
+            type: object
+        onboarding_completed:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OnboardingSubmitRequest:
+      type: object
+      required: [grade, subject_combination, weak_subjects, daily_study_minutes]
+      properties:
+        grade:
+          type: string
+          enum: [高一, 高二, 高三]
+        textbook_version:
+          type: object
+          additionalProperties:
+            type: string
+          description: 各科教材版本，如 {"math": "人教A版", "physics": "人教版"}
+        subject_combination:
+          type: array
+          items:
+            type: string
+          description: 选科科目代码列表
+        weak_subjects:
+          type: array
+          items:
+            type: string
+          maxItems: 3
+          description: 自评薄弱学科（最多 3 门）
+        recent_exam_scores:
+          type: object
+          additionalProperties:
+            type: number
+          description: 最近月考各科成绩（可选），如 {"math": 110, "physics": 72}
+        error_types_by_subject:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              enum: [calc_error, concept_unclear, careless, unknown]
+          description: 各科常见错误类型自评
+        daily_study_minutes:
+          type: integer
+          minimum: 10
+          maximum: 480
+          description: 日均课后学习时间（分钟）
+        upcoming_exam_date:
+          type: string
+          format: date
+          nullable: true
+          description: 近期最重要考试日期（可选）
+
+    # ---------- 计划 ----------
+
+    DailyPlan:
+      type: object
+      properties:
+        id:
+          type: integer
+        plan_date:
+          type: string
+          format: date
+        learning_mode:
+          type: string
+          enum: [workday_follow, weekend_review]
+        system_recommended_mode:
+          type: string
+          enum: [workday_follow, weekend_review]
+          description: 系统推荐的模式（学生可改选）
+        available_minutes:
+          type: integer
+        source:
+          type: string
+          enum: [upload_corrected, history_inferred, manual_adjusted, generic_fallback]
+          description: 计划来源
+        is_history_inferred:
+          type: boolean
+          description: 是否为历史推断（无新上传时）
+        recommended_subjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendedSubject"
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanTask"
+        status:
+          type: string
+          enum: [generated, in_progress, completed]
+        warning:
+          type: string
+          nullable: true
+          description: 警告信息（如"连续7天未上传新内容"）
+        created_at:
+          type: string
+          format: date-time
+
+    RecommendedSubject:
+      type: object
+      properties:
+        subject_id:
+          type: integer
+        subject_name:
+          type: string
+        reasons:
+          type: array
+          items:
+            type: string
+          description: 推荐原因标签（如 ["今日校内同步", "近期反复错误"]）
+
+    PlanTask:
+      type: object
+      properties:
+        id:
+          type: integer
+        plan_id:
+          type: integer
+        subject_id:
+          type: integer
+        subject_name:
+          type: string
+        task_type:
+          type: string
+          enum: [lecture, practice, error_review, consolidation]
+          description: 任务类型（讲解/练习/错题复习/巩固）
+        task_content:
+          type: object
+          description: 任务详情 JSON（知识点、题目列表等）
+        sequence:
+          type: integer
+          description: 任务顺序
+        estimated_minutes:
+          type: integer
+        status:
+          type: string
+          enum: [pending, entered, executed, completed]
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        duration_minutes:
+          type: integer
+          nullable: true
+
+    # ---------- 上传 ----------
+
+    StudyUpload:
+      type: object
+      properties:
+        id:
+          type: integer
+        upload_type:
+          type: string
+          enum: [note, homework, test, handout, score]
+        thumbnail_url:
+          type: string
+          nullable: true
+        subject_id:
+          type: integer
+          nullable: true
+        subject_name:
+          type: string
+          nullable: true
+        ocr_status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        is_manual_corrected:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    OcrStatusResponse:
+      type: object
+      properties:
+        upload_id:
+          type: integer
+        ocr_status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        ocr_result:
+          type: object
+          nullable: true
+          description: OCR 结构化结果（仅 completed 时有值）
+          properties:
+            extracted_questions:
+              type: array
+              items:
+                type: object
+                properties:
+                  question_text:
+                    type: string
+                  latex_expressions:
+                    type: array
+                    items:
+                      type: string
+                  question_type:
+                    type: string
+            subject_detected:
+              type: string
+            knowledge_points:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  name:
+                    type: string
+                  confidence:
+                    type: number
+        ocr_error:
+          type: string
+          nullable: true
+          description: 失败原因（仅 failed 时有值）
+
+    PaginatedUploads:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/StudyUpload"
+
+    # ---------- 答疑 ----------
+
+    ChatRequest:
+      type: object
+      required: [message]
+      properties:
+        session_id:
+          type: integer
+          nullable: true
+          description: 已有会话 ID（续接对话），null 时创建新会话
+        message:
+          type: string
+          description: 用户消息
+        attachments:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [image]
+              upload_id:
+                type: integer
+                description: 已上传材料的 ID
+        subject_id:
+          type: integer
+          nullable: true
+          description: 当前答疑学科（可选，用于会话关联）
+
+    ChatResponse:
+      type: object
+      properties:
+        session_id:
+          type: integer
+        message_id:
+          type: integer
+        role:
+          type: string
+          example: "assistant"
+        content:
+          type: string
+        knowledge_points:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+        tutoring_strategy:
+          type: string
+          enum: [hint, step_by_step, formula, full_solution]
+          description: 答疑策略标注
+
+    QaSession:
+      type: object
+      properties:
+        id:
+          type: integer
+        session_date:
+          type: string
+          format: date
+        subject_id:
+          type: integer
+          nullable: true
+        subject_name:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [active, closed]
+        message_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    QaSessionDetail:
+      allOf:
+        - $ref: "#/components/schemas/QaSession"
+        - type: object
+          properties:
+            messages:
+              type: array
+              items:
+                $ref: "#/components/schemas/QaMessage"
+
+    QaMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        attachments:
+          type: array
+          items:
+            type: object
+        intent:
+          type: string
+          enum: [upload_question, ask, follow_up, chat]
+          nullable: true
+        knowledge_points:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+        tutoring_strategy:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    PaginatedQaSessions:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/QaSession"
+
+    # ---------- 错题本 ----------
+
+    ErrorBookItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        subject_id:
+          type: integer
+        subject_name:
+          type: string
+        question_content:
+          type: object
+          description: 题目内容（含 LaTeX 表达式）
+          properties:
+            text:
+              type: string
+            latex_expressions:
+              type: array
+              items:
+                type: string
+        knowledge_points:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              name:
+                type: string
+        error_type:
+          type: string
+          enum: [calc_error, concept_unclear, careless, unknown]
+          nullable: true
+        entry_reason:
+          type: string
+          enum: [wrong, not_know, repeated_wrong]
+        is_explained:
+          type: boolean
+        is_recalled:
+          type: boolean
+        last_recall_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_recall_result:
+          type: string
+          enum: [success, fail]
+          nullable: true
+        recall_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    ErrorSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        unrecalled:
+          type: integer
+        by_subject:
+          type: array
+          items:
+            type: object
+            properties:
+              subject_id:
+                type: integer
+              subject_name:
+                type: string
+              count:
+                type: integer
+              unrecalled:
+                type: integer
+        by_error_type:
+          type: object
+          additionalProperties:
+            type: integer
+
+    PaginatedErrors:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/ErrorBookItem"
+
+    # ---------- 知识点状态 ----------
+
+    KnowledgeStatus:
+      type: object
+      properties:
+        knowledge_point_id:
+          type: integer
+        knowledge_point_name:
+          type: string
+        subject_name:
+          type: string
+        level:
+          type: integer
+          description: 层级（1-章/2-节/3-点）
+        status:
+          type: string
+          enum: [未观察, 初步接触, 需要巩固, 基本掌握, 反复失误]
+        importance_score:
+          type: number
+          format: float
+          description: 归一化重要性分（0.0-1.0）
+        last_updated_at:
+          type: string
+          format: date-time
+        is_manual_corrected:
+          type: boolean
+
+    # ---------- 周报 ----------
+
+    WeeklyReportStudent:
+      type: object
+      properties:
+        report_week:
+          type: string
+          example: "2026-W11"
+        usage_days:
+          type: integer
+        total_minutes:
+          type: integer
+        task_completion_rate:
+          type: number
+          format: float
+          description: 任务完成率（0-1）
+        subject_trends:
+          type: array
+          items:
+            type: object
+            properties:
+              subject_name:
+                type: string
+              risk_level:
+                type: string
+                enum: [稳定, 轻度风险, 中度风险, 高风险]
+              trend:
+                type: string
+                enum: [improving, stable, declining]
+        high_risk_knowledge_points:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              subject_name:
+                type: string
+              status:
+                type: string
+        repeated_error_points:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              error_count:
+                type: integer
+        next_stage_suggestions:
+          type: array
+          items:
+            type: string
+        class_rank:
+          type: integer
+          nullable: true
+        grade_rank:
+          type: integer
+          nullable: true
+        share_token:
+          type: string
+          nullable: true
+          description: 已生成的分享 Token（如有）
+
+    WeeklyReportParent:
+      type: object
+      description: 家长视角周报，不含具体错题内容和完整问答记录
+      properties:
+        report_week:
+          type: string
+        student_name:
+          type: string
+          description: 学生昵称
+        usage_days:
+          type: integer
+        total_minutes:
+          type: integer
+        task_completion_rate:
+          type: number
+          format: float
+        subject_risks:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubjectRisk"
+        trend_description:
+          type: string
+          description: 整体进步/退步的文字描述
+        action_suggestions:
+          type: array
+          items:
+            type: string
+          description: 针对家长的行动建议
+        class_rank:
+          type: integer
+          nullable: true
+        grade_rank:
+          type: integer
+          nullable: true
+        share_token:
+          type: string
+          nullable: true
+
+    StageReportParent:
+      type: object
+      properties:
+        weeks_covered:
+          type: integer
+        start_week:
+          type: string
+        end_week:
+          type: string
+        overall_trend:
+          type: string
+          enum: [improving, stable, declining]
+        subject_trends:
+          type: array
+          items:
+            type: object
+            properties:
+              subject_name:
+                type: string
+              trend:
+                type: string
+              risk_change:
+                type: string
+                description: 风险变化描述
+
+    SubjectRisk:
+      type: object
+      properties:
+        subject_id:
+          type: integer
+        subject_name:
+          type: string
+        risk_level:
+          type: string
+          enum: [稳定, 轻度风险, 中度风险, 高风险]
+        effective_week:
+          type: string
+
+    TrendData:
+      type: object
+      properties:
+        weeks:
+          type: array
+          items:
+            type: string
+          description: 周列表（最近 N 周）
+        subjects:
+          type: array
+          items:
+            type: object
+            properties:
+              subject_name:
+                type: string
+              risk_levels:
+                type: array
+                items:
+                  type: string
+                description: 与 weeks 对应的每周风险等级
+
+    ParentSupplementRequest:
+      type: object
+      properties:
+        grade:
+          type: string
+          enum: [高一, 高二, 高三]
+        subject_combination:
+          type: array
+          items:
+            type: string
+
+    ExamRecordRequest:
+      type: object
+      required: [exam_type, exam_date, subject_id, score]
+      properties:
+        exam_type:
+          type: string
+          enum: [月考, 期中, 期末, 周测]
+        exam_date:
+          type: string
+          format: date
+        subject_id:
+          type: integer
+        score:
+          type: number
+          minimum: 0
+        full_score:
+          type: number
+          default: 100
+        class_rank:
+          type: integer
+          nullable: true
+        grade_rank:
+          type: integer
+          nullable: true
+
+    ExamRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        exam_type:
+          type: string
+        exam_date:
+          type: string
+          format: date
+        subject_name:
+          type: string
+        score:
+          type: number
+        full_score:
+          type: number
+        score_rate:
+          type: number
+          description: 得分率（score / full_score）
+        created_at:
+          type: string
+          format: date-time
+
+    # ---------- 分享链接 ----------
+
+    ShareContent:
+      type: object
+      description: 脱敏摘要数据，不含敏感字段
+      properties:
+        student_name:
+          type: string
+          description: 学生昵称（脱敏，如"小明"）
+        report_week:
+          type: string
+        usage_days:
+          type: integer
+        total_minutes:
+          type: integer
+        trend_overview:
+          type: string
+          description: 进步/退步趋势概述
+        subject_risk_overview:
+          type: array
+          items:
+            type: object
+            properties:
+              subject_name:
+                type: string
+              risk_level:
+                type: string
+        next_stage_suggestions_summary:
+          type: string
+          description: 下阶段建议摘要
+        expires_at:
+          type: string
+          format: date-time
+
+    # ---------- 管理端 — 纠偏 ----------
+
+    CorrectionItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        target_type:
+          type: string
+          enum: [ocr, knowledge, plan, qa]
+        target_id:
+          type: integer
+        original_content:
+          type: object
+          nullable: true
+        corrected_content:
+          type: object
+        correction_reason:
+          type: string
+          nullable: true
+        corrected_by:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    CorrectionResult:
+      type: object
+      properties:
+        correction_id:
+          type: integer
+        target_type:
+          type: string
+        target_id:
+          type: integer
+        success:
+          type: boolean
+        message:
+          type: string
+
+    PaginatedCorrections:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  target_type:
+                    type: string
+                  target_id:
+                    type: integer
+                  created_at:
+                    type: string
+                    format: date-time
+                  status:
+                    type: string
+                    enum: [pending, resolved]
+
+    PaginatedCorrectionLogs:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/CorrectionItem"
+
+    # ---------- 管理端 — 监控 ----------
+
+    TodayMetrics:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        active_users:
+          type: integer
+        plans_generated:
+          type: integer
+        uploads_count:
+          type: integer
+        qa_sessions:
+          type: integer
+        total_api_requests:
+          type: integer
+        api_error_rate:
+          type: number
+          format: float
+        current_mode:
+          type: string
+          enum: [normal, best]
+        estimated_cost_today:
+          type: number
+          description: 今日估算成本（元）
+        pending_corrections:
+          type: integer
+          description: 待处理纠偏队列长度
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        components:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [ok, error]
+            redis:
+              type: string
+              enum: [ok, error]
+            celery_worker:
+              type: string
+              enum: [ok, error]
+            oss:
+              type: string
+              enum: [ok, error]
+
+    ModelCallStats:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        by_agent:
+          type: array
+          items:
+            type: object
+            properties:
+              agent_name:
+                type: string
+              total_calls:
+                type: integer
+              success_calls:
+                type: integer
+              fallback_calls:
+                type: integer
+              avg_latency_ms:
+                type: integer
+              p95_latency_ms:
+                type: integer
+              total_input_tokens:
+                type: integer
+              total_output_tokens:
+                type: integer
+              estimated_cost:
+                type: number
+
+    CostStats:
+      type: object
+      properties:
+        days:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              cost_normal_mode:
+                type: number
+              cost_best_mode:
+                type: number
+              total_cost:
+                type: number
+        total_cost:
+          type: number
+        daily_average:
+          type: number
+
+    ErrorStats:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        total_errors:
+          type: integer
+        api_errors:
+          type: integer
+        ocr_failures:
+          type: integer
+        llm_errors:
+          type: integer
+        by_type:
+          type: object
+          additionalProperties:
+            type: integer
+
+    FallbackStats:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        total_fallbacks:
+          type: integer
+        fallback_rate:
+          type: number
+          format: float
+        by_agent:
+          type: object
+          additionalProperties:
+            type: integer
+
+    LatencyStats:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        overall:
+          type: object
+          properties:
+            p50_ms:
+              type: integer
+            p95_ms:
+              type: integer
+            p99_ms:
+              type: integer
+        by_agent:
+          type: array
+          items:
+            type: object
+            properties:
+              agent_name:
+                type: string
+              p50_ms:
+                type: integer
+              p95_ms:
+                type: integer
+              p99_ms:
+                type: integer

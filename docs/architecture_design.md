@@ -266,30 +266,45 @@ class ModelCallLog(BaseModel):
 
 class ModelRouter:
     """
-    模型路由器：根据当前模式选择对应模型，支持自动降级
+    模型路由器：根据当前模式选择对应模型，支持自动降级。
+
+    当前模式存储在 Redis（key: system:run_mode），所有进程（API / Worker / Beat）
+    统一从 Redis 读取，确保 switch_mode() 后所有进程即时感知，无需重启。
+    YAML 文件仅作为初始默认值来源（当 Redis 中尚无值时回退读取）。
     """
-    
-    def __init__(self, config_path: str = "config/model_config.yaml"):
+
+    REDIS_MODE_KEY = "system:run_mode"
+
+    def __init__(self, config_path: str = "config/model_config.yaml", redis_client=None):
         self._config = self._load_config(config_path)
-        self._current_mode = RunMode(self._config["current_mode"])
+        self._redis = redis_client  # 由外部注入（FastAPI lifespan / Celery setup）
         self._providers = {}  # 缓存 provider 客户端
-    
+
     def _load_config(self, path: str) -> dict:
         with open(path, 'r') as f:
             return yaml.safe_load(f)
-    
+
     @property
     def current_mode(self) -> RunMode:
-        return self._current_mode
-    
+        """从 Redis 读取当前模式；Redis 不可用时回退到 YAML 默认值"""
+        if self._redis:
+            try:
+                val = self._redis.get(self.REDIS_MODE_KEY)
+                if val:
+                    return RunMode(val.decode() if isinstance(val, bytes) else val)
+            except Exception:
+                pass
+        return RunMode(self._config.get("current_mode", "normal"))
+
     def switch_mode(self, mode: RunMode) -> None:
-        """切换运行模式（热切换，无需重启）"""
-        self._current_mode = mode
-        # 同时更新配置文件以持久化
+        """切换运行模式（写入 Redis，所有进程实时生效，无需重启）"""
+        if self._redis:
+            self._redis.set(self.REDIS_MODE_KEY, mode.value)
+        # 同时更新 YAML 文件作为持久化备份
         self._config["current_mode"] = mode.value
         with open("config/model_config.yaml", 'w') as f:
             yaml.dump(self._config, f)
-    
+
     def get_model_config(self, agent_name: str, mode: Optional[RunMode] = None) -> ModelConfig:
         """获取指定 Agent 在指定模式下的模型配置"""
         mode = mode or self._current_mode
@@ -689,6 +704,9 @@ def create_tutoring_workflow() -> StateGraph:
     # assessment 结束
     workflow.add_edge("assessment", END)
     
+    # 引入 Checkpointer 进行多轮对话状态持久化 (防服务重启丢失上下文)
+    # 实际实现可传入 AsyncpgSaver 或 RedisSaver
+    # return workflow.compile(checkpointer=checkpointer)
     return workflow.compile()
 
 # 单例工作流实例
@@ -712,14 +730,19 @@ async def chat_stream(
 ):
     """流式答疑接口"""
     async def generate():
-        async for chunk in tutoring_agent.stream_response(
-            student_id=student.id,
-            session_id=request.session_id,
-            message=request.message,
-            attachments=request.attachments,
-        ):
-            yield f"data: {chunk}\n\n"
-        yield "data: [DONE]\n\n"
+        try:
+            async for chunk in tutoring_agent.stream_response(
+                student_id=student.id,
+                session_id=request.session_id,
+                message=request.message,
+                attachments=request.attachments,
+            ):
+                yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            # 推流异常处理：发送错误特征帧以便前端捕获并降级
+            import json
+            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
     
     return StreamingResponse(
         generate(),
@@ -793,19 +816,32 @@ class SubjectRiskLevel(str, Enum):
 @shared_task
 def aggregate_weekly_subject_risk():
     """
-    每周日晚执行，汇总学科风险状态
+    每周日晚执行，汇总学科风险状态。
+
+    注意：Celery worker 在同步上下文中运行。若底层 DB 操作使用
+    SQLAlchemy 2.0 async，必须通过 asyncio.run() 桥接，否则会
+    抛出 RuntimeError: no running event loop。
+    不要直接 await 异步函数或使用 asyncio.get_event_loop()（在
+    Python 3.10+ 中已弃用）。
     """
-    students = get_all_active_students()
-    
+    import asyncio
+    asyncio.run(_async_aggregate_weekly_subject_risk())
+
+
+async def _async_aggregate_weekly_subject_risk():
+    """异步实现，由 Celery task 通过 asyncio.run() 调用"""
+    students = await get_all_active_students_async()
+
     for student in students:
         for subject in student.subjects:
-            # 汇总本周数据
-            weekly_stats = calculate_weekly_stats(
+            # 汇总本周数据 (注意显式声明时区，防止跨国服务器时区漂移)
+            from zoneinfo import ZoneInfo
+            weekly_stats = await calculate_weekly_stats_async(
                 student_id=student.id,
                 subject_id=subject.id,
-                start_date=datetime.now() - timedelta(days=7),
+                start_date=datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=7),
             )
-            
+
             # 计算风险等级
             risk_level = calculate_risk_level(
                 error_rate=weekly_stats.error_rate,
@@ -813,9 +849,9 @@ def aggregate_weekly_subject_risk():
                 usage_frequency=weekly_stats.usage_frequency,
                 score_trend=weekly_stats.score_trend,
             )
-            
+
             # 更新学科风险状态
-            update_subject_risk_state(
+            await update_subject_risk_state_async(
                 student_id=student.id,
                 subject_id=subject.id,
                 risk_level=risk_level,
@@ -825,7 +861,236 @@ def aggregate_weekly_subject_risk():
 
 ---
 
+### 4.5 Assessment Agent 判断逻辑与输出格式
+
+#### 4.5.1 状态迁移规则
+
+Assessment Agent 在每次答疑会话结束后对本轮知识点交互做定性评估，输出状态变更建议。判断规则如下：
+
+| 触发条件 | 当前状态 | 新状态 |
+|---------|---------|-------|
+| 本轮答疑一次答对（无提示） | 未观察 / 初步接触 | 基本掌握 |
+| 本轮答疑经提示后答对 | 未观察 / 初步接触 | 需要巩固 |
+| 本轮答疑答错或放弃 | 任意 | 初步接触（若首次）/ 需要巩固（若已接触）|
+| 错题召回答对 | 需要巩固 / 基本掌握 | 基本掌握 |
+| 错题召回再次答错（同一知识点累计 ≥ 2 次） | 任意 | 反复失误 |
+| 人工纠偏 | 任意 | 人工指定状态 |
+
+**连续掌握门槛**：升至"基本掌握"需满足同一知识点在不同会话中答对 ≥ 2 次（非同一会话连续答对）；仅凭单次会话答对，最高迁移至"需要巩固"。
+
+#### 4.5.2 structured_summary 输出格式（JSON Schema）
+
+Assessment Agent 将评估结果写入 `qa_sessions.structured_summary`，格式定义：
+
+```json
+{
+  "session_id": 123,
+  "assessed_at": "2026-03-18T21:30:00+08:00",
+  "knowledge_point_updates": [
+    {
+      "knowledge_point_id": 42,
+      "knowledge_point_name": "函数的定义域",
+      "previous_status": "初步接触",
+      "new_status": "需要巩固",
+      "reason": "经提示后答对",
+      "confidence": 0.85
+    }
+  ],
+  "session_summary": {
+    "total_questions": 3,
+    "correct_first_try": 1,
+    "correct_with_hint": 1,
+    "incorrect": 1,
+    "dominant_error_type": "概念不清"
+  },
+  "suggested_followup": "建议明日复习函数定义域与值域的区分"
+}
+```
+
+`trigger_detail` 字段在 `knowledge_update_logs` 中存储对应 `knowledge_point_updates` 单条记录，以保证逐条可溯源。
+
+---
+
+### 4.6 OCR 异步处理完整流程
+
+#### 4.6.1 上传到 OCR 完成的全流程
+
+```
+前端选择图片/文件
+        │
+        ▼
+POST /student/material/upload
+        │  返回: { upload_id, ocr_status: "pending" }
+        ▼
+后端: 写入 OSS → 创建 study_uploads 记录（ocr_status=pending）
+        │
+        ▼
+发布 Celery 任务: process_ocr.delay(upload_id)
+        │
+        ▼ (异步，Celery Worker 执行)
+┌──────────────────────────────────┐
+│ 1. 从 OSS 下载原始文件           │
+│ 2. 调用 Extraction Agent (VL)    │
+│ 3. 解析 LaTeX + 题目结构化       │
+│ 4. 更新 study_uploads:           │
+│    ocr_result, extracted_questions│
+│    ocr_status = "completed"      │
+│    （失败时: ocr_status="failed" │
+│     ocr_error=错误信息）          │
+└──────────────────────────────────┘
+        │
+        ▼ (若 ocr_status=failed 且重试次数≤2)
+自动重试 (Celery autoretry, max_retries=2, countdown=30s)
+        │
+        ▼ (超过重试次数)
+创建 manual_corrections 待处理记录，触发人工纠偏
+```
+
+#### 4.6.2 前端轮询策略
+
+```typescript
+// 上传后轮询 OCR 状态
+async function pollOcrStatus(uploadId: number): Promise<OcrResult> {
+  const MAX_POLLS = 20;       // 最多轮询 20 次
+  const POLL_INTERVAL = 3000; // 每 3 秒轮询一次（最长等待 60s）
+  const TIMEOUT_MS = 60000;
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    const { data } = await api.get(`/student/material/${uploadId}/ocr-status`);
+    if (data.ocr_status === "completed") return data.ocr_result;
+    if (data.ocr_status === "failed") {
+      // 展示"识别失败，请手动输入或联系管理员"提示
+      throw new OcrFailedError(data.ocr_error);
+    }
+    await sleep(POLL_INTERVAL);
+  }
+  throw new OcrTimeoutError("OCR 超时，请稍后刷新");
+}
+```
+
+#### 4.6.3 OCR 失败触发人工纠偏条件
+
+| 条件 | 行为 |
+|------|------|
+| Celery 任务重试 3 次全部失败 | 写入 `manual_corrections`（target_type="ocr"），管理端出现待处理队列 |
+| Extraction Agent 返回空结果 | 同上 |
+| `ocr_status` 超过 5 分钟仍为 `processing` | Beat 定时检查，超时则标记 failed 并入队 |
+
+---
+
+### 4.7 冷启动设计（入学问卷）
+
+#### 4.7.1 问题背景
+
+新学生第一次使用时 `student_knowledge_status` 全为"未观察"，Planning Agent 无任何学情信号可用，无法生成有意义的推荐。冷启动通过入学问卷快速建立初始学情。
+
+#### 4.7.2 入学问卷字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `grade` | SELECT | 高一 / 高二 / 高三 |
+| `textbook_version` | SELECT | 各科教材版本（数学A/B版等）|
+| `subject_combination` | MULTISELECT | 已选科目（物化生/史地政等）|
+| `weak_subjects` | MULTISELECT | 自评薄弱学科（最多 3 门）|
+| `recent_exam_scores` | JSONB | 最近一次月考各科成绩（可跳过）|
+| `error_types_by_subject` | JSONB | 各科常见错误类型自评（计算/概念/粗心）|
+| `daily_study_minutes` | NUMBER | 日均课后学习时间（分钟）|
+| `upcoming_exam_date` | DATE | 近期最重要考试日期（可选）|
+
+#### 4.7.3 问卷结果 → 初始状态映射规则
+
+```python
+# app/onboarding/state_initializer.py
+
+def initialize_student_states(onboarding_data: dict, student_id: int) -> list[KnowledgeStatusSeed]:
+    """
+    将入学问卷映射为初始知识点状态和学科风险状态。
+    """
+    seeds = []
+
+    # 规则1: 自评薄弱学科 → 该学科章级知识点初始化为"初步接触"
+    for subject_code in onboarding_data.get("weak_subjects", []):
+        chapter_ids = get_chapter_level_points(subject_code)
+        for kp_id in chapter_ids:
+            seeds.append(KnowledgeStatusSeed(
+                knowledge_point_id=kp_id,
+                status="初步接触",
+                reason="onboarding_weak_subject"
+            ))
+
+    # 规则2: 月考成绩 < 60% 满分 → 对应学科风险标记为"中度风险"
+    for subject_code, score in onboarding_data.get("recent_exam_scores", {}).items():
+        full_score = 150 if subject_code in ("chinese", "math", "english") else 100
+        if score / full_score < 0.6:
+            mark_subject_risk(student_id, subject_code, "中度风险", reason="onboarding_low_score")
+        elif score / full_score < 0.75:
+            mark_subject_risk(student_id, subject_code, "轻度风险", reason="onboarding_score")
+
+    # 规则3: 无月考成绩 + 自评薄弱 → 轻度风险兜底
+    for subject_code in onboarding_data.get("weak_subjects", []):
+        if subject_code not in onboarding_data.get("recent_exam_scores", {}):
+            mark_subject_risk(student_id, subject_code, "轻度风险", reason="onboarding_self_report")
+
+    return seeds
+```
+
+完成问卷后：
+1. 调用 `initialize_student_states()` 写入初始知识点状态批次
+2. 将 `student_profiles.onboarding_completed` 更新为 `true`
+3. Planning Agent 在 `onboarding_completed=false` 时拒绝生成个性化计划并引导完成问卷
+
+---
+
+### 4.8 knowledge_tree 数据初始化方案
+
+#### 4.8.1 数据来源
+
+知识树初始数据基于"上海高考考纲 + 历年真题标注"生成，分两步：
+
+1. **人工录入骨架**：参照上海市高考考试说明，手动录入三层结构（章/节/知识点），覆盖 MVP 5 门科目（语文/数学/英语/物理/化学）
+2. **GPT-4o 标注 importance_score**：将历年真题（近 5 年，2020–2024 年上海高考真题）与知识树知识点进行匹配，统计 `exam_frequency`，再结合考纲级别计算 `importance_score`
+
+#### 4.8.2 importance_score 计算公式
+
+```
+importance_score = 归一化(exam_frequency) × 0.4
+                 + 归一化(score_weight)     × 0.4
+                 + syllabus_weight           × 0.2
+
+syllabus_weight: 了解=0.3, 理解=0.6, 掌握=1.0
+score_weight: 该知识点对应题型的平均分值（如大题=12分, 小题=4分）
+归一化: 按同学科内最大值做 min-max 归一化
+```
+
+#### 4.8.3 Seed Data 脚本规范
+
+```python
+# scripts/seed_knowledge_tree.py
+# 运行: python scripts/seed_knowledge_tree.py --subject math --dry-run
+
+"""
+Seed 脚本说明：
+- 从 data/syllabus/<subject>.json 读取人工整理的知识树结构
+- 从 data/exam_questions/<subject>_2020_2024.json 读取历年真题标注
+- 计算每个知识点的 exam_frequency、importance_score
+- 写入 knowledge_tree 表（使用 upsert on conflict code DO UPDATE）
+- --dry-run 参数：只输出待写入数据，不实际写入
+"""
+```
+
+数据文件路径约定：
+- `data/syllabus/math.json` — 数学知识树骨架（人工整理）
+- `data/exam_questions/math_2020_2024.json` — 历年真题与知识点映射（GPT-4o 标注后人工审核）
+
+---
+
 ## 5. API 分层设计
+
+### 5.0 全局限流策略 (Rate Limiting)
+基于 Redis + fastapi-limiter 限制异常刷量与控制大模型成本，核心接口策略配置：
+*   `/api/v1/student/qa/chat/stream`: 同一学生并发限 1 个请求，每分钟最多 5 次。
+*   `/api/v1/student/material/upload`: 同一学生每分钟最多 10 次。
+*   `/api/v1/student/plan/generate`: 同一学生每小时最多 3 次。
 
 ### 5.1 学生端 API
 
@@ -833,6 +1098,9 @@ def aggregate_weekly_subject_risk():
 POST   /api/v1/student/profile                   # 创建学生档案（首次建档）
 GET    /api/v1/student/profile                   # 获取学生档案
 PATCH  /api/v1/student/profile                   # 更新学生信息
+
+POST   /api/v1/student/onboarding/submit         # 提交入学问卷（冷启动，首次必填）
+GET    /api/v1/student/onboarding/status         # 查询入学问卷完成状态
 
 POST   /api/v1/student/plan/generate             # 生成今日计划
 GET    /api/v1/student/plan/today                # 获取今日计划
@@ -957,6 +1225,8 @@ CREATE TABLE student_profiles (
     subject_combination JSONB NOT NULL DEFAULT '[]', -- 选科组合
     upcoming_exams JSONB DEFAULT '[]',             -- 近期考试节点
     current_progress JSONB DEFAULT '{}',           -- 当前学习进度
+    onboarding_completed BOOLEAN NOT NULL DEFAULT false, -- 入学问卷是否已完成（冷启动标志）
+    onboarding_data JSONB DEFAULT '{}',            -- 入学问卷原始填写数据
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(user_id)
@@ -1002,6 +1272,10 @@ CREATE TABLE knowledge_tree (
     level INTEGER NOT NULL DEFAULT 1,              -- 层级 1-章 2-节 3-点
     description TEXT,
     textbook_versions JSONB DEFAULT '[]',          -- 适用教材版本
+    importance_score DECIMAL(5,4) DEFAULT 0.5,     -- 归一化重要性分 0.0-1.0，由考纲+频次计算
+    exam_frequency INTEGER DEFAULT 0,              -- 近年（近5年）上海高考出现次数
+    last_exam_year INTEGER,                        -- 最近出现的年份
+    syllabus_level VARCHAR(20),                    -- 考纲要求级别: 了解/理解/掌握
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -1031,6 +1305,7 @@ CREATE INDEX idx_student_knowledge_status ON student_knowledge_status(status);
 CREATE TABLE daily_plans (
     id SERIAL PRIMARY KEY,
     student_id INTEGER NOT NULL REFERENCES student_profiles(id),
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
     plan_date DATE NOT NULL,
     learning_mode VARCHAR(30) NOT NULL,            -- workday_follow/weekend_review
     system_recommended_mode VARCHAR(30),           -- 系统推荐模式
@@ -1070,7 +1345,9 @@ CREATE INDEX idx_plan_tasks_plan ON plan_tasks(plan_id);
 CREATE TABLE study_uploads (
     id SERIAL PRIMARY KEY,
     student_id INTEGER NOT NULL REFERENCES student_profiles(id),
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
     upload_type VARCHAR(30) NOT NULL,              -- note/homework/test/handout/score
+    file_hash VARCHAR(64) NOT NULL,                -- 文件的 SHA256/MD5，用于上传秒传与防重复 OCR
     original_url VARCHAR(500) NOT NULL,            -- OSS 原始文件 URL
     thumbnail_url VARCHAR(500),                    -- 缩略图 URL
     ocr_result JSONB,                              -- OCR 结构化结果
@@ -1090,12 +1367,14 @@ CREATE INDEX idx_study_uploads_ocr_status ON study_uploads(ocr_status);
 CREATE TABLE error_book (
     id SERIAL PRIMARY KEY,
     student_id INTEGER NOT NULL REFERENCES student_profiles(id),
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
     subject_id INTEGER NOT NULL REFERENCES subjects(id),
     question_content JSONB NOT NULL,               -- 题目内容（含 LaTeX）
     question_image_url VARCHAR(500),               -- 原题图片
     knowledge_points JSONB NOT NULL DEFAULT '[]',  -- 关联知识点
     error_type VARCHAR(50),                        -- 计算错误/概念不清/粗心/不会
     entry_reason VARCHAR(50) NOT NULL,             -- wrong/not_know/repeated_wrong
+    content_hash VARCHAR(64),                      -- SHA256(question_text + sorted knowledge_point_ids)，应用层去重键
     is_explained BOOLEAN DEFAULT false,            -- 是否已讲解
     is_recalled BOOLEAN DEFAULT false,             -- 是否已召回
     last_recall_at TIMESTAMPTZ,
@@ -1108,6 +1387,7 @@ CREATE TABLE error_book (
 CREATE INDEX idx_error_book_student ON error_book(student_id);
 CREATE INDEX idx_error_book_subject ON error_book(subject_id);
 CREATE INDEX idx_error_book_recall ON error_book(is_recalled, last_recall_at);
+CREATE UNIQUE INDEX idx_error_book_dedup ON error_book(student_id, content_hash) WHERE content_hash IS NOT NULL;
 ```
 
 #### 6.1.5 答疑记录
@@ -1121,6 +1401,7 @@ CREATE TABLE qa_sessions (
     task_id INTEGER REFERENCES plan_tasks(id),
     subject_id INTEGER REFERENCES subjects(id),
     status VARCHAR(20) DEFAULT 'active',           -- active/closed
+    structured_summary JSONB,                      -- Assessment Agent 输出的结构化评估（见 §4.5 格式定义）
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     closed_at TIMESTAMPTZ
 );
@@ -1238,21 +1519,24 @@ CREATE INDEX idx_corrections_type ON manual_corrections(target_type, created_at 
 
 知识树采用三层结构：章 → 节 → 知识点
 
-```sql
--- 示例：数学知识树初始化
-INSERT INTO knowledge_tree (subject_id, parent_id, name, code, level) VALUES
--- 高一数学
-(1, NULL, '集合与常用逻辑用语', 'math-set', 1),
-(1, 1, '集合的概念与表示', 'math-set-concept', 2),
-(1, 2, '集合的含义', 'math-set-concept-meaning', 3),
-(1, 2, '集合的表示方法', 'math-set-concept-notation', 3),
-(1, 1, '集合间的基本关系', 'math-set-relation', 2),
-(1, 5, '子集与真子集', 'math-set-relation-subset', 3),
+> **数据初始化说明**：完整的知识树 seed data 通过 `scripts/seed_knowledge_tree.py` 生成写入，
+> 详见 §4.8。下方仅为结构示例，不代表完整数据。
 
-(1, NULL, '函数', 'math-function', 1),
-(1, 7, '函数的概念', 'math-function-concept', 2),
-(1, 8, '函数的定义域', 'math-function-concept-domain', 3),
-(1, 8, '函数的值域', 'math-function-concept-range', 3);
+```sql
+-- 示例：数学知识树初始化（含 importance_score 字段）
+INSERT INTO knowledge_tree (subject_id, parent_id, name, code, level, syllabus_level, exam_frequency, importance_score) VALUES
+-- 高一数学
+(1, NULL, '集合与常用逻辑用语', 'math-set', 1, '理解', 3, 0.55),
+(1, 1, '集合的概念与表示', 'math-set-concept', 2, '理解', 2, 0.50),
+(1, 2, '集合的含义', 'math-set-concept-meaning', 3, '了解', 1, 0.35),
+(1, 2, '集合的表示方法', 'math-set-concept-notation', 3, '理解', 2, 0.50),
+(1, 1, '集合间的基本关系', 'math-set-relation', 2, '掌握', 4, 0.75),
+(1, 5, '子集与真子集', 'math-set-relation-subset', 3, '掌握', 3, 0.68),
+
+(1, NULL, '函数', 'math-function', 1, '掌握', 8, 0.92),
+(1, 7, '函数的概念', 'math-function-concept', 2, '掌握', 6, 0.85),
+(1, 8, '函数的定义域', 'math-function-concept-domain', 3, '掌握', 5, 0.80),
+(1, 8, '函数的值域', 'math-function-concept-range', 3, '掌握', 4, 0.72);
 ```
 
 ---
@@ -1276,6 +1560,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/studypilot
       - REDIS_URL=redis://redis:6379/0
+      - TZ=Asia/Shanghai
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -1300,6 +1585,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/studypilot
       - REDIS_URL=redis://redis:6379/0
+      - TZ=Asia/Shanghai
     volumes:
       - ./config:/app/config
     depends_on:
@@ -1315,6 +1601,7 @@ services:
     command: celery -A app.tasks beat -l info
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - TZ=Asia/Shanghai
     depends_on:
       - redis
     restart: unless-stopped
@@ -1531,3 +1818,9 @@ async def require_admin(
 | 学习模式 | 工作日跟学 + 周末复习 | MVP 收敛，考试冲刺延后 |
 | 状态更新策略 | 知识点实时 + 学科风险周汇总 | 平衡即时反馈与状态稳定性 |
 | 错题召回 | P0 必做 | PRD 明确要求，验证学习闭环 |
+| ModelRouter 模式存储 | Redis（key: system:run_mode） | YAML 文件写后其他进程内存不同步；Redis 多进程共享一致 |
+| Celery async DB 操作 | asyncio.run() 桥接 | Celery worker 同步上下文；直接 await 抛出 RuntimeError |
+| Assessment 触发时机 | Tutoring 流式结束后 Redis queue 异步触发 | 不阻塞用户看到响应，同时保证评估完整性 |
+| 冷启动方案 | 入学问卷 → 初始知识点状态批量写入 | Day 1 无历史数据，问卷提供最小可用学情信号 |
+| 错题去重 | content_hash（SHA256）+ 唯一索引 | 避免同一道题多次上传重复入库 |
+| knowledge_tree importance_score | 频次×0.4 + 分值权重×0.4 + 考纲级别×0.2 | 加权覆盖"考得多""分值高""考纲要求高"三个维度 |
