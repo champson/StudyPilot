@@ -10,6 +10,7 @@ import { PageSkeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { mockDailyPlan } from "@/lib/mock-data";
 import { cn, formatDate, getWeekday, taskTypeLabels, modeLabels } from "@/lib/utils";
+import { getSubject } from "@/lib/subjects";
 import type { PlanTask, TaskStatus } from "@/types/api";
 
 export default function TodayPlanPage() {
@@ -74,17 +75,7 @@ export default function TodayPlanPage() {
             </div>
           </div>
 
-          <p className="text-sm text-text-secondary mb-2">推荐学科</p>
-          <div className="flex gap-2 flex-wrap">
-            {plan.recommended_subjects.map((s) => (
-              <div key={s.name} className="px-3 py-2 bg-primary-light rounded-lg">
-                <span className="text-sm font-medium text-primary">{s.name}</span>
-                <span className="text-xs text-primary/70 ml-2">{s.reasons[0]}</span>
-              </div>
-            ))}
-          </div>
-
-          {plan.source === "history_inferred" && (
+          {plan.is_history_inferred && (
             <div className="mt-3 px-3 py-2 bg-warning-light rounded-lg text-xs text-warning flex items-center gap-1">
               ⚠️ 基于历史推断生成，建议上传今日学习内容以提升准确度
             </div>
@@ -96,6 +87,8 @@ export default function TodayPlanPage() {
           {tasks.map((task, i) => {
             const config = statusConfig[task.status];
             const taskType = taskTypeLabels[task.task_type];
+            const subject = getSubject(task.subject_id);
+            const content = task.task_content;
 
             return (
               <div key={task.id} className="relative pl-10 pb-6">
@@ -111,8 +104,8 @@ export default function TodayPlanPage() {
                 <Card className={cn("border", config.cardClass)}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <span>{task.subject.icon}</span>
-                      <span className="font-medium text-sm">{task.subject.name}</span>
+                      <span>{subject.icon}</span>
+                      <span className="font-medium text-sm">{subject.name}</span>
                       <span className="text-text-tertiary text-sm">·</span>
                       <span className="text-sm text-text-secondary">{taskType?.label}</span>
                     </div>
@@ -121,11 +114,11 @@ export default function TodayPlanPage() {
                     </Badge>
                   </div>
 
-                  <p className="text-sm text-text-primary mb-2">{task.description}</p>
+                  <p className="text-sm text-text-primary mb-2">{content.description}</p>
 
-                  {task.reasons.length > 0 && (
+                  {content.reasons && content.reasons.length > 0 && (
                     <div className="flex gap-1.5 flex-wrap mb-2">
-                      {task.reasons.map((r) => <Badge key={r} variant="warning">{r}</Badge>)}
+                      {content.reasons.map((r) => <Badge key={r} variant="warning">{r}</Badge>)}
                     </div>
                   )}
 

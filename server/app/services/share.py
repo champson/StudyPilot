@@ -55,10 +55,17 @@ async def get_share_content(db: AsyncSession, token: str) -> dict:
             # Desensitize: show first char + ***
             nickname = user.nickname[0] + "***" if len(user.nickname) > 1 else user.nickname
 
+    # Extract share_summary fields matching api-contract ShareContent
+    summary = report.share_summary or {}
+
     return {
-        "student_nickname": nickname,
+        "student_name": nickname,
         "report_week": report.report_week,
-        "summary": report.share_summary,
+        "usage_days": report.usage_days,
+        "total_minutes": report.total_minutes,
+        "trend_overview": summary.get("trend_overview"),
+        "subject_risk_overview": summary.get("subject_risk_overview", []),
+        "next_stage_suggestions_summary": summary.get("next_stage_suggestions_summary"),
         "expires_at": report.share_expires_at,
     }
 

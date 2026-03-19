@@ -30,7 +30,15 @@ export default function OnboardingPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  // Restore from localStorage
+  // Check if onboarding already completed → redirect to dashboard
+  useEffect(() => {
+    const completed = localStorage.getItem("onboarding_completed");
+    if (completed === "true") {
+      router.replace("/dashboard");
+    }
+  }, [router]);
+
+  // Restore ALL fields from localStorage
   useEffect(() => {
     const saved = localStorage.getItem("onboarding_draft");
     if (saved) {
@@ -38,17 +46,25 @@ export default function OnboardingPage() {
         const data = JSON.parse(saved);
         if (data.grade) setGrade(data.grade);
         if (data.textbookVersion) setTextbookVersion(data.textbookVersion);
+        if (data.classRank) setClassRank(data.classRank);
+        if (data.gradeRank) setGradeRank(data.gradeRank);
+        if (data.classTotal) setClassTotal(data.classTotal);
+        if (data.gradeTotal) setGradeTotal(data.gradeTotal);
         if (data.electives) setElectives(data.electives);
+        if (data.exams) setExams(data.exams);
         if (data.step) setStep(data.step);
       } catch { /* ignore */ }
     }
     setHydrated(true);
   }, []);
 
+  // Persist ALL fields to localStorage
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem("onboarding_draft", JSON.stringify({ grade, textbookVersion, electives, step }));
-  }, [grade, textbookVersion, electives, step, hydrated]);
+    localStorage.setItem("onboarding_draft", JSON.stringify({
+      grade, textbookVersion, classRank, gradeRank, classTotal, gradeTotal, electives, exams, step,
+    }));
+  }, [grade, textbookVersion, classRank, gradeRank, classTotal, gradeTotal, electives, exams, step, hydrated]);
 
   function toggleElective(s: Subject) {
     setElectives((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : prev.length < 3 ? [...prev, s] : prev);

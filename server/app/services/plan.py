@@ -6,21 +6,39 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import AppError
 from app.models.plan import DailyPlan, PlanTask
+from app.models.student_profile import StudentProfile
 
 TASK_STATUS_ORDER = {"pending": 0, "entered": 1, "executed": 2, "completed": 3}
-WEEKDAY_MODE = "工作日跟学"
-WEEKEND_MODE = "周末复习"
+# Sequential transitions: pending→entered→executed→completed
+TASK_NEXT_STEP = {"pending": "entered", "entered": "executed", "executed": "completed"}
+WEEKDAY_MODE = "workday_follow"
+WEEKEND_MODE = "weekend_review"
 
 
 def validate_transition(current: str, target: str) -> bool:
+    """Allow sequential step OR skip directly to completed from any state."""
     if current not in TASK_STATUS_ORDER or target not in TASK_STATUS_ORDER:
         return False
-    return TASK_STATUS_ORDER[target] > TASK_STATUS_ORDER[current]
+    if target == "completed" and current != "completed":
+        return True
+    return TASK_NEXT_STEP.get(current) == target
 
 
 async def generate_plan_stub(
     db: AsyncSession, student_id: int, available_minutes: int, learning_mode: str | None
 ) -> DailyPlan:
+    # Check onboarding completed
+    profile_result = await db.execute(
+        select(StudentProfile).where(StudentProfile.id == student_id)
+    )
+    profile = profile_result.scalar_one_or_none()
+    if not profile or not profile.onboarding_completed:
+        raise AppError(
+            "ONBOARDING_NOT_COMPLETED",
+            "请先完成入学问卷，才能生成个性化学习计划",
+            status_code=400,
+        )
+
     today = date.today()
 
     # Check for existing active plan
@@ -44,7 +62,7 @@ async def generate_plan_stub(
         learning_mode=mode,
         system_recommended_mode=mode,
         available_minutes=available_minutes,
-        source="stub",
+        source="generic_fallback",
         is_history_inferred=False,
         recommended_subjects={"subject_ids": [1, 2]},
         plan_content={"description": "Stub 计划，Phase 3 将替换为 AI 生成"},

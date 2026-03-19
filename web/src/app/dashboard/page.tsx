@@ -26,7 +26,9 @@ export default function DashboardPage() {
     return () => clearTimeout(timer);
   }, []);
 
-  const progressPercent = plan.total_tasks > 0 ? Math.round((plan.completed_tasks / plan.total_tasks) * 100) : 0;
+  const completedCount = plan.tasks.filter((t) => t.status === "completed").length;
+  const totalCount = plan.tasks.length;
+  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
   return (
     <div className="min-h-screen bg-bg">
@@ -47,29 +49,21 @@ export default function DashboardPage() {
                 <div className="flex items-start gap-4">
                   <ProgressRing percent={progressPercent} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-text-secondary mb-2">今日推荐 {plan.recommended_subjects.length} 门学科</p>
-                    <div className="space-y-1.5">
-                      {plan.recommended_subjects.map((s) => (
-                        <div key={s.name} className="flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-                          <span className="text-sm font-medium">{s.name}</span>
-                          <span className="text-xs text-text-tertiary">{s.reasons[0]}</span>
-                        </div>
-                      ))}
-                    </div>
+                    <p className="text-sm text-text-secondary mb-2">今日 {totalCount} 个任务</p>
+                    <p className="text-xs text-text-tertiary">模式：{modeLabels[plan.learning_mode]}</p>
                   </div>
                 </div>
 
-                <p className="text-xs text-text-tertiary mt-3">已完成 {plan.completed_tasks}/{plan.total_tasks} 个任务</p>
+                <p className="text-xs text-text-tertiary mt-3">已完成 {completedCount}/{totalCount} 个任务</p>
 
-                {plan.source === "history_inferred" && (
+                {plan.is_history_inferred && (
                   <div className="mt-2 px-3 py-1.5 bg-warning-light rounded-lg text-xs text-warning flex items-center gap-1">
                     <span>⚠️</span> 基于历史推断生成
                   </div>
                 )}
 
                 <Button className="mt-4" fullWidth onClick={() => router.push("/plan/today")}>
-                  {plan.completed_tasks > 0 ? "▶ 继续学习" : "▶ 开始学习"}
+                  {completedCount > 0 ? "▶ 继续学习" : "▶ 开始学习"}
                 </Button>
               </Card>
 
@@ -128,18 +122,18 @@ export default function DashboardPage() {
                 <CardTitle>📕 错题本</CardTitle>
                 <p className="text-sm text-text-secondary mb-3">待处理错题</p>
                 <div className="flex gap-2 flex-wrap mb-4">
-                  {Object.entries(errorSummary.by_subject).map(([subject, count]) => (
-                    <div key={subject} className="flex flex-col items-center px-3 py-2 bg-gray-50 rounded-lg min-w-[48px]">
-                      <span className="text-xs text-text-tertiary">{subject}</span>
-                      <span className="text-lg font-semibold text-text-primary">{count}</span>
+                  {errorSummary.by_subject.map((s) => (
+                    <div key={s.subject_name} className="flex flex-col items-center px-3 py-2 bg-gray-50 rounded-lg min-w-[48px]">
+                      <span className="text-xs text-text-tertiary">{s.subject_name}</span>
+                      <span className="text-lg font-semibold text-text-primary">{s.count}</span>
                     </div>
                   ))}
                 </div>
 
-                {errorSummary.pending_recall_count > 0 && (
+                {errorSummary.unrecalled > 0 && (
                   <div className="flex items-center gap-2 mb-4 text-sm">
                     <span className="w-2 h-2 rounded-full bg-error animate-pulse" />
-                    <span className="text-error font-medium">{errorSummary.pending_recall_count} 道错题待召回</span>
+                    <span className="text-error font-medium">{errorSummary.unrecalled} 道错题待召回</span>
                   </div>
                 )}
 
@@ -156,11 +150,9 @@ export default function DashboardPage() {
               <div className="flex items-center gap-4 md:gap-6 text-sm text-text-secondary flex-wrap">
                 <span>本周学习 <strong className="text-text-primary">{mockWeeklyReport.usage_days}</strong> 天</span>
                 <span className="hidden md:inline text-border">│</span>
-                <span>累计 <strong className="text-text-primary">{formatMinutes(mockWeeklyReport.total_minutes)}</strong></span>
+                <span>累计 <strong className="text-text-primary">{formatMinutes(mockWeeklyReport.total_minutes ?? 0)}</strong></span>
                 <span className="hidden md:inline text-border">│</span>
                 <span>完成率 <strong className="text-text-primary">{mockWeeklyReport.task_completion_rate}%</strong></span>
-                <span className="hidden md:inline text-border">│</span>
-                <span>错题修复 <strong className="text-text-primary">{mockWeeklyReport.fixed_errors}</strong> 道</span>
               </div>
               <Link href="/report/weekly" className="text-sm text-primary hover:underline whitespace-nowrap">
                 查看周报 →

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,18 @@ const navItems = [
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [authorized, setAuthorized] = useState(false);
+
+  useEffect(() => {
+    const role = localStorage.getItem("user_role");
+    if (role !== "admin") {
+      router.replace("/login");
+    } else {
+      setAuthorized(true);
+    }
+  }, [router]);
+
+  if (!authorized) return null;
 
   return (
     <div className="min-h-screen bg-bg">
@@ -23,7 +36,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             <span className="font-semibold text-text-primary">管理后台</span>
           </div>
           <button
-            onClick={() => { localStorage.removeItem("access_token"); router.push("/login"); }}
+            onClick={() => { localStorage.removeItem("access_token"); localStorage.removeItem("user_role"); router.push("/login"); }}
             className="text-sm text-text-secondary hover:text-error transition-colors"
           >
             退出

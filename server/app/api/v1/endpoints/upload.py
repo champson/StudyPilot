@@ -2,6 +2,7 @@ import math
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import JSONResponse
 
 from app.api.v1.deps import get_student_id, require_student
 from app.core.database import get_db
@@ -13,7 +14,7 @@ from app.services import upload as svc
 router = APIRouter(prefix="/student/material", tags=["upload"])
 
 
-@router.post("/upload", response_model=SuccessResponse[UploadOut])
+@router.post("/upload")
 async def upload_material(
     file: UploadFile = File(...),
     upload_type: str = Form(...),
@@ -23,7 +24,17 @@ async def upload_material(
     _user: User = Depends(require_student),
 ):
     upload = await svc.handle_upload(db, student_id, file, upload_type, subject_id)
-    return SuccessResponse(data=UploadOut.model_validate(upload))
+    return JSONResponse(
+        status_code=202,
+        content={
+            "data": {
+                "resource_id": upload.id,
+                "status": upload.ocr_status,
+                "poll_url": f"/api/v1/student/material/{upload.id}/ocr-status",
+                "message": "文件已上传，正在识别中，请稍后查询结果",
+            }
+        },
+    )
 
 
 @router.get("/list", response_model=PaginatedResponse[UploadOut])
@@ -64,7 +75,7 @@ async def get_ocr_status(
     )
 
 
-@router.post("/{upload_id}/retry-ocr", response_model=SuccessResponse[UploadOut])
+@router.post("/{upload_id}/retry-ocr")
 async def retry_ocr(
     upload_id: int,
     student_id: int = Depends(get_student_id),
@@ -72,4 +83,14 @@ async def retry_ocr(
     _user: User = Depends(require_student),
 ):
     upload = await svc.retry_ocr(db, student_id, upload_id)
-    return SuccessResponse(data=UploadOut.model_validate(upload))
+    return JSONResponse(
+        status_code=202,
+        content={
+            "data": {
+                "resource_id": upload.id,
+                "status": upload.ocr_status,
+                "poll_url": f"/api/v1/student/material/{upload.id}/ocr-status",
+                "message": "已重新提交识别任务，请稍后查询结果",
+            }
+        },
+    )

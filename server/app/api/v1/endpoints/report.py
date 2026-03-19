@@ -19,6 +19,8 @@ async def get_weekly_report(
     _user: User = Depends(require_student),
 ):
     report = await svc.get_weekly_report(db, student_id, week)
+    # Unpack structured fields from student_view_content JSONB
+    content = report.student_view_content or {}
     return SuccessResponse(
         data=WeeklyReportOut(
             id=report.id,
@@ -26,7 +28,14 @@ async def get_weekly_report(
             report_week=report.report_week,
             usage_days=report.usage_days,
             total_minutes=report.total_minutes,
-            content=report.student_view_content,
+            task_completion_rate=content.get("task_completion_rate"),
+            subject_trends=content.get("subject_trends", []),
+            high_risk_knowledge_points=content.get("high_risk_knowledge_points", []),
+            repeated_error_points=content.get("repeated_error_points", []),
+            next_stage_suggestions=content.get("next_stage_suggestions", []),
+            class_rank=content.get("class_rank"),
+            grade_rank=content.get("grade_rank"),
+            share_token=report.share_token,
             created_at=report.created_at,
         )
     )

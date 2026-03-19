@@ -57,4 +57,5 @@ async def create_share_link(
     return {
         "share_url": f"/api/v1/share/{token}",
         "expires_at": expires_at,
+        "share_token": token,
     }

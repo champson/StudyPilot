@@ -55,14 +55,6 @@ export const modeLabels: Record<string, string> = {
   exam_sprint: "考试冲刺",
 };
 
-export const statusLabels: Record<string, { label: string; color: string }> = {
-  not_explained: { label: "未讲解", color: "text-text-secondary bg-gray-100" },
-  explained: { label: "已讲解", color: "text-warning bg-warning-light" },
-  pending_recall: { label: "待召回", color: "text-error bg-error-light" },
-  recall_success: { label: "召回成功", color: "text-success bg-success-light" },
-  recall_fail: { label: "召回失败", color: "text-error bg-error-light" },
-};
-
 export const entryReasonLabels: Record<string, string> = {
   wrong: "做错", not_know: "不会", repeated_wrong: "反复错",
 };
@@ -72,4 +64,10 @@ export const riskLevelLabels: Record<string, { label: string; color: string }> =
   low_risk: { label: "轻度风险", color: "text-warning" },
   medium_risk: { label: "中度风险", color: "text-orange-500" },
   high_risk: { label: "高风险", color: "text-error" },
+};
+
+export const trendLabels: Record<string, { label: string; icon: string }> = {
+  improving: { label: "上升", icon: "↑" },
+  stable: { label: "稳定", icon: "→" },
+  declining: { label: "下降", icon: "↓" },
 };

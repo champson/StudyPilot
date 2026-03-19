@@ -28,14 +28,20 @@ async def get_weekly_report(
     _user: User = Depends(require_parent),
 ):
     report = await svc.get_parent_weekly_report(db, student_id, week)
+    content = report.parent_view_content or {}
     return SuccessResponse(
         data=ParentWeeklyReportOut(
-            id=report.id,
-            student_id=report.student_id,
             report_week=report.report_week,
+            student_name=content.get("student_name"),
             usage_days=report.usage_days,
             total_minutes=report.total_minutes,
-            content=report.parent_view_content,
+            task_completion_rate=content.get("task_completion_rate"),
+            subject_risks=content.get("subject_risks", []),
+            trend_description=content.get("trend_description"),
+            action_suggestions=content.get("action_suggestions", []),
+            class_rank=content.get("class_rank"),
+            grade_rank=content.get("grade_rank"),
+            share_token=report.share_token,
             created_at=report.created_at,
         )
     )

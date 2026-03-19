@@ -24,11 +24,18 @@ class ErrorBookOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ErrorSubjectSummary(BaseModel):
+    subject_id: int
+    subject_name: str
+    count: int
+    unrecalled: int
+
+
 class ErrorSummaryOut(BaseModel):
     total: int
-    by_subject: list[dict]
-    recalled_count: int
-    not_recalled_count: int
+    unrecalled: int
+    by_subject: list[ErrorSubjectSummary]
+    by_error_type: dict[str, int]
 
 
 class RecallResult(BaseModel):

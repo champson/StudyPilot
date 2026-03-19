@@ -87,8 +87,8 @@ async def get_ocr_status(
 
 async def retry_ocr(db: AsyncSession, student_id: int, upload_id: int) -> StudyUpload:
     upload = await get_ocr_status(db, student_id, upload_id)
-    if upload.ocr_status not in ("failed", "pending"):
-        raise AppError("OCR_RETRY_INVALID", "当前状态不允许重试", status_code=400)
+    if upload.ocr_status != "failed":
+        raise AppError("UPLOAD_OCR_NOT_FAILED", "当前 OCR 状态非 failed，无需重试", status_code=400)
 
     upload.ocr_status = "pending"
     upload.ocr_error = None

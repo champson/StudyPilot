@@ -3,13 +3,25 @@ from datetime import date, datetime
 from pydantic import BaseModel
 
 
+class SubjectRisk(BaseModel):
+    subject_id: int
+    subject_name: str
+    risk_level: str
+    effective_week: str
+
+
 class ParentWeeklyReportOut(BaseModel):
-    id: int
-    student_id: int
     report_week: str
+    student_name: str | None = None
     usage_days: int | None = None
     total_minutes: int | None = None
-    content: dict
+    task_completion_rate: float | None = None
+    subject_risks: list[SubjectRisk] = []
+    trend_description: str | None = None
+    action_suggestions: list[str] = []
+    class_rank: int | None = None
+    grade_rank: int | None = None
+    share_token: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

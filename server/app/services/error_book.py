@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.error_book import ErrorBook
+from app.models.subject import Subject
 
 
 async def list_errors(
@@ -55,21 +56,56 @@ async def get_error_summary(db: AsyncSession, student_id: int) -> dict:
         )
     )
     recalled = recalled_result.scalar() or 0
+    unrecalled = total - recalled
 
+    # Per-subject breakdown with unrecalled count and subject name
     by_subject_result = await db.execute(
-        select(ErrorBook.subject_id, func.count(ErrorBook.id))
+        select(
+            ErrorBook.subject_id,
+            func.count(ErrorBook.id),
+            func.count(ErrorBook.id).filter(
+                ErrorBook.is_recalled == False  # noqa: E712
+            ),
+        )
         .where(*base_cond)
         .group_by(ErrorBook.subject_id)
     )
+    by_subject_rows = by_subject_result.all()
+
+    # Look up subject names
+    subject_ids = [row[0] for row in by_subject_rows]
+    subject_name_map: dict[int, str] = {}
+    if subject_ids:
+        subj_result = await db.execute(
+            select(Subject.id, Subject.name).where(Subject.id.in_(subject_ids))
+        )
+        subject_name_map = {r[0]: r[1] for r in subj_result.all()}
+
     by_subject = [
-        {"subject_id": row[0], "count": row[1]} for row in by_subject_result.all()
+        {
+            "subject_id": row[0],
+            "subject_name": subject_name_map.get(row[0], ""),
+            "count": row[1],
+            "unrecalled": row[2],
+        }
+        for row in by_subject_rows
     ]
+
+    # Per error_type breakdown
+    by_type_result = await db.execute(
+        select(ErrorBook.error_type, func.count(ErrorBook.id))
+        .where(*base_cond)
+        .group_by(ErrorBook.error_type)
+    )
+    by_error_type = {
+        (row[0] or "unknown"): row[1] for row in by_type_result.all()
+    }
 
     return {
         "total": total,
+        "unrecalled": unrecalled,
         "by_subject": by_subject,
-        "recalled_count": recalled,
-        "not_recalled_count": total - recalled,
+        "by_error_type": by_error_type,
     }
 
 

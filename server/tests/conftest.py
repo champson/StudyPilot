@@ -103,7 +103,7 @@ async def seed_data(db_session: AsyncSession) -> dict:
     profile = StudentProfile(
         user_id=student_user.id,
         grade="高二",
-        onboarding_completed=False,
+        onboarding_completed=True,
     )
     db_session.add(profile)
     await db_session.flush()

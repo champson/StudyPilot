@@ -1,5 +1,5 @@
 // ============================================
-// API Types - based on docs/api-contract.md
+// API Types - aligned with backend schemas
 // ============================================
 
 // --- Global ---
@@ -88,7 +88,7 @@ export interface ExamSchedule {
   subjects: Subject[];
 }
 
-// --- Daily Plan ---
+// --- Daily Plan (matches DailyPlanOut / PlanTaskOut) ---
 export type LearningMode = "workday_follow" | "weekend_review" | "exam_sprint";
 export type PlanSource = "upload_corrected" | "history_inferred" | "manual_adjusted" | "generic_fallback";
 export type TaskType = "lecture" | "practice" | "error_review" | "consolidation";
@@ -96,32 +96,30 @@ export type TaskStatus = "pending" | "entered" | "executed" | "completed";
 
 export interface DailyPlan {
   id: number;
+  student_id: number;
   plan_date: string;
   learning_mode: LearningMode;
+  system_recommended_mode?: string;
   available_minutes: number;
   source: PlanSource;
-  status: "generated" | "in_progress" | "completed";
-  recommended_subjects: RecommendedSubject[];
+  is_history_inferred: boolean;
+  recommended_subjects: Record<string, unknown>;
+  plan_content: Record<string, unknown>;
+  status: string;
+  created_at: string;
   tasks: PlanTask[];
-  completed_tasks: number;
-  total_tasks: number;
-}
-
-export interface RecommendedSubject {
-  name: Subject;
-  reasons: string[];
 }
 
 export interface PlanTask {
   id: number;
-  sequence: number;
-  subject: { name: Subject; icon: string };
+  plan_id: number;
+  subject_id: number;
   task_type: TaskType;
-  title: string;
-  description: string;
-  reasons: string[];
-  estimated_minutes: number;
+  task_content: { title?: string; description?: string; reasons?: string[] };
+  sequence: number;
+  estimated_minutes?: number;
   status: TaskStatus;
+  started_at?: string;
   completed_at?: string;
   duration_minutes?: number;
 }
@@ -160,57 +158,116 @@ export interface QAMessage {
   created_at: string;
 }
 
-// --- Error Book ---
-export type ErrorStatus = "not_explained" | "explained" | "pending_recall" | "recall_success" | "recall_fail";
+// --- Error Book (matches ErrorBookOut / ErrorSummaryOut) ---
 export type ErrorType = "计算错误" | "概念不清" | "粗心" | "不会";
 export type EntryReason = "wrong" | "not_know" | "repeated_wrong";
 
 export interface ErrorBookItem {
   id: number;
-  subject: { name: Subject; icon: string };
-  question_content: string;
+  student_id: number;
+  subject_id: number;
+  question_content: { text?: string; [key: string]: unknown };
   question_image_url?: string;
-  knowledge_points: string[];
-  error_type: ErrorType;
+  knowledge_points: Array<{ id?: number; name: string }>;
+  error_type?: string;
   entry_reason: EntryReason;
-  status: ErrorStatus;
-  created_at: string;
+  content_hash?: string;
+  is_explained: boolean;
+  is_recalled: boolean;
   last_recall_at?: string;
-  last_recall_result?: "success" | "fail";
+  last_recall_result?: string;
+  recall_count: number;
+  source_upload_id?: number;
+  created_at: string;
+}
+
+export interface ErrorSubjectSummary {
+  subject_id: number;
+  subject_name: string;
+  count: number;
+  unrecalled: number;
 }
 
 export interface ErrorSummary {
   total: number;
-  pending_recall_count: number;
-  by_subject: Record<string, number>;
+  unrecalled: number;
+  by_subject: ErrorSubjectSummary[];
+  by_error_type: Record<string, number>;
 }
 
-// --- Weekly Report ---
+// --- Weekly Report (matches WeeklyReportOut) ---
+export interface SubjectTrend {
+  subject_name: string;
+  risk_level: string;
+  trend: "improving" | "stable" | "declining";
+}
+
+export interface HighRiskKnowledgePoint {
+  name: string;
+  subject_name: string;
+  status: string;
+}
+
+export interface RepeatedErrorPoint {
+  name: string;
+  error_count: number;
+}
+
 export interface WeeklyReport {
   id: number;
-  week: string;
-  usage_days: number;
-  total_minutes: number;
-  completed_tasks: number;
-  task_completion_rate: number;
-  fixed_errors: number;
-  subject_performances: SubjectPerformance[];
-  high_risk_points: string[];
-  repeated_errors: string[];
-  suggestions: string[];
-  week_over_week: {
-    usage_days_change: number;
-    total_minutes_change: number;
-    completion_rate_change: number;
-  };
+  student_id: number;
+  report_week: string;
+  usage_days?: number;
+  total_minutes?: number;
+  task_completion_rate?: number;
+  subject_trends: SubjectTrend[];
+  high_risk_knowledge_points: HighRiskKnowledgePoint[];
+  repeated_error_points: RepeatedErrorPoint[];
+  next_stage_suggestions: string[];
+  class_rank?: number;
+  grade_rank?: number;
+  share_token?: string;
+  created_at: string;
 }
 
-export interface SubjectPerformance {
-  subject: Subject;
-  risk_level: "stable" | "low_risk" | "medium_risk" | "high_risk";
-  summary: string;
-  knowledge_points_improved: string[];
-  knowledge_points_declined: string[];
+// --- Parent Report (matches ParentWeeklyReportOut) ---
+export interface ParentSubjectRisk {
+  subject_id: number;
+  subject_name: string;
+  risk_level: string;
+  effective_week: string;
+}
+
+export interface ParentWeeklyReport {
+  report_week: string;
+  student_name?: string;
+  usage_days?: number;
+  total_minutes?: number;
+  task_completion_rate?: number;
+  subject_risks: ParentSubjectRisk[];
+  trend_description?: string;
+  action_suggestions: string[];
+  class_rank?: number;
+  grade_rank?: number;
+  share_token?: string;
+  created_at: string;
+}
+
+// --- Share (matches ShareContentOut) ---
+export interface SubjectRiskOverview {
+  subject_name: string;
+  risk_level: string;
+}
+
+export interface ShareReport {
+  student_name?: string;
+  report_week: string;
+  usage_days?: number;
+  total_minutes?: number;
+  trend_overview?: string;
+  subject_risk_overview: SubjectRiskOverview[];
+  next_stage_suggestions_summary?: string;
+  expires_at?: string;
 }
 
 // --- Admin ---
@@ -236,16 +293,4 @@ export interface SystemMetrics {
   error_rate: number;
   ocr_success_rate: number;
   fallback_rate: number;
-}
-
-// --- Share ---
-export interface ShareReport {
-  student_nickname: string;
-  week: string;
-  usage_days: number;
-  total_minutes: number;
-  task_completion_rate: number;
-  subject_summaries: { subject: Subject; risk_level: string; summary: string }[];
-  suggestions: string[];
-  generated_at: string;
 }

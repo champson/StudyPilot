@@ -52,8 +52,8 @@ async def chat_stream(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),
 ):
-    # Save user message to DB before streaming
-    await svc.chat_sync(
+    # Save user message and get session
+    session, _user_msg = await svc.save_user_message(
         db,
         student_id,
         body.session_id,
@@ -62,6 +62,10 @@ async def chat_stream(
         body.task_id,
         body.attachments,
     )
+    # Persist the stub assistant message now (content is deterministic in stub)
+    # In Phase 3, this will be replaced by assembling chunks after streaming.
+    await svc.save_stream_assistant_message(db, session.id)
+
     return StreamingResponse(svc.chat_stream_stub(), media_type="text/event-stream")
 
 

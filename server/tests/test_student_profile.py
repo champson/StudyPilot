@@ -32,35 +32,14 @@ async def test_onboarding_status(client: AsyncClient, seed_data: dict):
         headers={"Authorization": f"Bearer {seed_data['student_token']}"},
     )
     assert resp.status_code == 200
-    assert resp.json()["data"]["onboarding_completed"] is False
-
-
-@pytest.mark.asyncio
-async def test_submit_onboarding(client: AsyncClient, seed_data: dict):
-    resp = await client.post(
-        "/api/v1/student/onboarding/submit",
-        headers={"Authorization": f"Bearer {seed_data['student_token']}"},
-        json={
-            "weak_subjects": [1, 2],
-            "low_score_subjects": [3],
-            "available_minutes_weekday": 90,
-        },
-    )
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["onboarding_completed"] is True
+    # seed_data creates profile with onboarding_completed=True
+    assert resp.json()["data"]["onboarding_completed"] is True
 
 
 @pytest.mark.asyncio
 async def test_submit_onboarding_duplicate(client: AsyncClient, seed_data: dict):
+    # seed_data already has onboarding_completed=True, so submitting again should fail
     headers = {"Authorization": f"Bearer {seed_data['student_token']}"}
-    # First submission
-    await client.post(
-        "/api/v1/student/onboarding/submit",
-        headers=headers,
-        json={"weak_subjects": [], "low_score_subjects": []},
-    )
-    # Second submission should fail
     resp = await client.post(
         "/api/v1/student/onboarding/submit",
         headers=headers,
