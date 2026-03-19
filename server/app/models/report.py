@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,7 +42,7 @@ class WeeklyReport(Base):
     student_view_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     parent_view_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     share_summary: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    share_token: Mapped[str | None] = mapped_column(String(100), unique=True)
+    share_token: Mapped[str | None] = mapped_column(Text, unique=True)
     share_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

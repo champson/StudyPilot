@@ -41,20 +41,39 @@ async def engine():
 async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with session_factory() as session:
-        yield session
-        await session.rollback()
+        # Use a nested transaction (SAVEPOINT) so that rollback undoes everything
+        # including commits made by the application code via get_db override.
+        async with session.begin():
+            nested = await session.begin_nested()
+
+            # Override get_db to reuse this session and re-open savepoints after commits
+            async def override_get_db():
+                nonlocal nested
+                try:
+                    yield session
+                    # Application code calls commit() via get_db; absorb it as a
+                    # nested savepoint commit so the outer txn stays open.
+                    if nested.is_active:
+                        await nested.commit()
+                    nested = await session.begin_nested()
+                except Exception:
+                    if nested.is_active:
+                        await nested.rollback()
+                    nested = await session.begin_nested()
+                    raise
+
+            app.dependency_overrides[get_db] = override_get_db
+            yield session
+            # Rollback the outer transaction — undoes ALL data written during the test
+            await session.rollback()
+        app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
-    async def override_get_db():
-        yield db_session
-
-    app.dependency_overrides[get_db] = override_get_db
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
-    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture
@@ -118,8 +137,6 @@ async def seed_data(db_session: AsyncSession) -> dict:
         "student_id": profile.id,
     }
     parent_token = create_access_token(parent_jwt)
-
-    await db_session.commit()
 
     return {
         "admin": admin,

@@ -1,0 +1,44 @@
+from datetime import datetime
+
+from pydantic import BaseModel
+
+
+class ErrorBookOut(BaseModel):
+    id: int
+    student_id: int
+    subject_id: int
+    question_content: dict
+    question_image_url: str | None = None
+    knowledge_points: list = []
+    error_type: str | None = None
+    entry_reason: str
+    content_hash: str | None = None
+    is_explained: bool
+    is_recalled: bool
+    last_recall_at: datetime | None = None
+    last_recall_result: str | None = None
+    recall_count: int
+    source_upload_id: int | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ErrorSummaryOut(BaseModel):
+    total: int
+    by_subject: list[dict]
+    recalled_count: int
+    not_recalled_count: int
+
+
+class RecallResult(BaseModel):
+    result: str  # "correct" | "incorrect" | "partial"
+
+
+class BatchRecallItem(BaseModel):
+    id: int
+    result: str
+
+
+class BatchRecallRequest(BaseModel):
+    items: list[BatchRecallItem]

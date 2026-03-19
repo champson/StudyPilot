@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     ADMIN_PHONE: str = "admin"
     ADMIN_PASSWORD: str = "changeme"
 
+    UPLOAD_DIR: str = "./uploads"
+    SHARE_TOKEN_SECRET: str = "change-me-share-secret"
+    SHARE_TOKEN_EXPIRE_DAYS: int = 7
+
     DEBUG: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}

@@ -1,6 +1,7 @@
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 
 import jwt
+import redis.asyncio as aioredis
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -12,6 +13,15 @@ from app.core.exceptions import AppError
 from app.models.user import User
 
 security = HTTPBearer()
+
+_redis_pool: aioredis.Redis | None = None
+
+
+async def get_redis() -> AsyncGenerator[aioredis.Redis, None]:
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    yield _redis_pool
 
 
 async def get_current_user(
@@ -38,6 +48,14 @@ async def get_current_user(
     # Attach decoded payload for convenience
     user._jwt_payload = payload  # type: ignore[attr-defined]
     return user
+
+
+def get_student_id(user: User = Depends(get_current_user)) -> int:
+    payload = user._jwt_payload  # type: ignore[attr-defined]
+    student_id = payload.get("student_id")
+    if student_id is None:
+        raise AppError("AUTH_NO_STUDENT", "当前用户未关联学生档案", status_code=403)
+    return student_id
 
 
 def require_role(*roles: str) -> Callable:
