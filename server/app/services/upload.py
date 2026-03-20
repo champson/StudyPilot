@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.models.upload import StudyUpload
-from app.tasks.ocr import process_ocr
+from app.tasks.ocr import process_ocr, run_ocr_pipeline_inline
 
 
 async def handle_upload(
@@ -40,8 +40,7 @@ async def handle_upload(
     db.add(upload)
     await db.flush()
 
-    # Dispatch Celery OCR task
-    process_ocr.delay(upload.id)
+    await _dispatch_ocr_task(upload.id, db=db, upload=upload)
 
     return upload
 
@@ -88,11 +87,34 @@ async def get_ocr_status(
 async def retry_ocr(db: AsyncSession, student_id: int, upload_id: int) -> StudyUpload:
     upload = await get_ocr_status(db, student_id, upload_id)
     if upload.ocr_status != "failed":
-        raise AppError("UPLOAD_OCR_NOT_FAILED", "当前 OCR 状态非 failed，无需重试", status_code=400)
+        raise AppError(
+            "UPLOAD_OCR_NOT_FAILED",
+            f"当前 OCR 状态为 {upload.ocr_status}，无需重试",
+            status_code=400,
+            detail={"current_ocr_status": upload.ocr_status},
+        )
 
     upload.ocr_status = "pending"
     upload.ocr_error = None
     await db.flush()
 
-    process_ocr.delay(upload.id)
+    await _dispatch_ocr_task(upload.id, db=db, upload=upload)
     return upload
+
+
+async def _dispatch_ocr_task(
+    upload_id: int,
+    *,
+    db: AsyncSession | None = None,
+    upload: StudyUpload | None = None,
+) -> None:
+    try:
+        if settings.OCR_SYNC_FALLBACK:
+            if db is None or upload is None:
+                raise RuntimeError("sync fallback requires live db session and upload record")
+            await run_ocr_pipeline_inline(db, upload)
+        else:
+            process_ocr.delay(upload_id)
+    except Exception:
+        # Broker 不可用时保持 pending，由测试或后台任务显式触发 pipeline。
+        return

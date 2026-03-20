@@ -25,8 +25,12 @@ async def generate_plan(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),
 ):
-    plan = await svc.generate_plan_stub(
-        db, student_id, body.available_minutes, body.learning_mode
+    plan = await svc.generate_plan(
+        db,
+        student_id,
+        body.available_minutes,
+        body.learning_mode,
+        body.force_regenerate,
     )
     return SuccessResponse(data=DailyPlanOut.model_validate(plan))
 

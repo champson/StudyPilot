@@ -41,3 +41,19 @@ async def test_parent_cannot_access_admin(client: AsyncClient, seed_data: dict):
     headers = {"Authorization": f"Bearer {seed_data['parent_token']}"}
     resp = await client.get("/api/v1/admin/metrics/today", headers=headers)
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_switch_system_mode(client: AsyncClient, seed_data: dict):
+    headers = {"Authorization": f"Bearer {seed_data['admin_token']}"}
+    resp = await client.post(
+        "/api/v1/admin/system/mode",
+        headers=headers,
+        json={"mode": "best"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["mode"] == "best"
+
+    get_resp = await client.get("/api/v1/admin/system/mode", headers=headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["data"]["mode"] == "best"

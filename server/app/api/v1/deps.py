@@ -10,18 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import AppError
+from app.core.redis import get_redis_client
 from app.models.user import User
 
 security = HTTPBearer()
 
-_redis_pool: aioredis.Redis | None = None
-
 
 async def get_redis() -> AsyncGenerator[aioredis.Redis, None]:
-    global _redis_pool
-    if _redis_pool is None:
-        _redis_pool = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-    yield _redis_pool
+    yield get_redis_client()
 
 
 async def get_current_user(

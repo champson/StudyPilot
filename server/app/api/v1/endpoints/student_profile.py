@@ -8,6 +8,7 @@ from app.schemas.common import SuccessResponse
 from app.schemas.student_profile import (
     OnboardingStatusOut,
     OnboardingSubmit,
+    OnboardingSubmitOut,
     StudentProfileCreate,
     StudentProfileOut,
     StudentProfileUpdate,
@@ -48,15 +49,15 @@ async def update_profile(
     return SuccessResponse(data=StudentProfileOut.model_validate(profile))
 
 
-@router.post("/onboarding/submit", response_model=SuccessResponse[StudentProfileOut])
+@router.post("/onboarding/submit", response_model=SuccessResponse[OnboardingSubmitOut])
 async def submit_onboarding(
     body: OnboardingSubmit,
     student_id: int = Depends(get_student_id),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),
 ):
-    profile = await svc.submit_onboarding(db, student_id, body)
-    return SuccessResponse(data=StudentProfileOut.model_validate(profile))
+    result = await svc.submit_onboarding(db, student_id, body)
+    return SuccessResponse(data=OnboardingSubmitOut(**result))
 
 
 @router.get("/onboarding/status", response_model=SuccessResponse[OnboardingStatusOut])

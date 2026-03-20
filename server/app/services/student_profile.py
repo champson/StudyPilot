@@ -2,13 +2,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
-from app.models.knowledge import StudentKnowledgeStatus
 from app.models.student_profile import StudentProfile
+from app.models.subject import Subject
 from app.schemas.student_profile import (
     OnboardingSubmit,
     StudentProfileCreate,
     StudentProfileUpdate,
 )
+from app.services.knowledge import batch_init_from_onboarding
 
 
 async def get_profile(db: AsyncSession, student_id: int) -> StudentProfile:
@@ -54,30 +55,89 @@ async def update_profile(
 
 async def submit_onboarding(
     db: AsyncSession, student_id: int, data: OnboardingSubmit
-) -> StudentProfile:
+) -> dict:
     profile = await get_profile(db, student_id)
     if profile.onboarding_completed:
         raise AppError(
-            "ONBOARDING_ALREADY_COMPLETED", "入学问卷已提交", status_code=409
+            "ONBOARDING_ALREADY_COMPLETED",
+            "入学问卷已完成，如需修改请联系管理员",
+            status_code=409,
+            detail={"completed_at": profile.updated_at.isoformat() if profile.updated_at else None},
         )
 
-    profile.onboarding_data = data.model_dump()
+    payload = data.model_dump(mode="json")
+    profile.onboarding_data = payload
+
+    if data.grade:
+        profile.grade = data.grade
+    if isinstance(data.textbook_version, str):
+        profile.textbook_version = data.textbook_version
+    if data.subject_combination:
+        profile.subject_combination = list(data.subject_combination)
+    if data.upcoming_exam_date:
+        profile.upcoming_exams = [{"date": data.upcoming_exam_date.isoformat()}]
+
+    weak_subject_ids = await _resolve_subject_ids(db, data.weak_subjects)
+    low_score_subject_ids = await _resolve_subject_ids(db, data.low_score_subjects)
+    recent_exam_scores = await _resolve_exam_scores(db, data.recent_exam_scores)
+    for subject_id in low_score_subject_ids:
+        recent_exam_scores.setdefault(subject_id, 59.0)
+
+    init_result = await batch_init_from_onboarding(
+        db,
+        student_id=student_id,
+        weak_subject_ids=weak_subject_ids,
+        recent_exam_scores=recent_exam_scores,
+    )
+
     profile.onboarding_completed = True
-
-    # Initialize knowledge statuses for weak subjects
-    for subject_id in data.weak_subjects:
-        status = StudentKnowledgeStatus(
-            student_id=student_id,
-            knowledge_point_id=subject_id,  # placeholder mapping
-            status="初步接触",
-            last_update_reason="onboarding_weak_subject",
-        )
-        db.add(status)
-
     await db.flush()
-    return profile
+    return {
+        "onboarding_completed": True,
+        "initialized_knowledge_points": init_result["initialized_knowledge_points"],
+        "initialized_subject_risks": init_result["initialized_subject_risks"],
+    }
 
 
 async def get_onboarding_status(db: AsyncSession, student_id: int) -> bool:
     profile = await get_profile(db, student_id)
     return profile.onboarding_completed
+
+
+async def _resolve_subject_ids(
+    db: AsyncSession, refs: list[int | str]
+) -> list[int]:
+    if not refs:
+        return []
+    result = await db.execute(select(Subject))
+    subjects = result.scalars().all()
+    by_id = {str(subject.id): subject.id for subject in subjects}
+    by_code = {subject.code: subject.id for subject in subjects}
+    by_name = {subject.name: subject.id for subject in subjects}
+
+    resolved: list[int] = []
+    for ref in refs:
+        key = str(ref)
+        subject_id = by_id.get(key) or by_code.get(key) or by_name.get(key)
+        if subject_id is not None and subject_id not in resolved:
+            resolved.append(subject_id)
+    return resolved
+
+
+async def _resolve_exam_scores(
+    db: AsyncSession, raw_scores: dict[str, float]
+) -> dict[int, float]:
+    if not raw_scores:
+        return {}
+    result = await db.execute(select(Subject))
+    subjects = result.scalars().all()
+    by_code = {subject.code: subject.id for subject in subjects}
+    by_name = {subject.name: subject.id for subject in subjects}
+    by_id = {str(subject.id): subject.id for subject in subjects}
+
+    resolved: dict[int, float] = {}
+    for ref, score in raw_scores.items():
+        subject_id = by_id.get(str(ref)) or by_code.get(ref) or by_name.get(ref)
+        if subject_id is not None:
+            resolved[subject_id] = float(score)
+    return resolved

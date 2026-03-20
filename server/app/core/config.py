@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     SHARE_TOKEN_SECRET: str = "change-me-share-secret"
     SHARE_TOKEN_EXPIRE_DAYS: int = 7
 
+    DASHSCOPE_API_KEY: str = ""
+    DEEPSEEK_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+
+    MODEL_CONFIG_PATH: str = "config/model_config.yaml"
+    OCR_SYNC_FALLBACK: bool = False
+
     DEBUG: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}

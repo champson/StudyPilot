@@ -1,0 +1,88 @@
+current_mode: normal
+
+agents:
+  routing:
+    normal:
+      provider: dashscope
+      model: qwen-turbo
+      timeout: 10
+      max_retries: 1
+      temperature: 0.0
+    best:
+      provider: dashscope
+      model: qwen-turbo
+      timeout: 10
+      max_retries: 1
+      temperature: 0.0
+
+  extraction:
+    normal:
+      provider: dashscope
+      model: qwen-vl-max
+      timeout: 30
+      max_retries: 2
+      temperature: 0.1
+    best:
+      provider: openai
+      model: gpt-4o
+      timeout: 45
+      max_retries: 2
+      temperature: 0.1
+
+  planning:
+    normal:
+      provider: dashscope
+      model: qwen-max
+      timeout: 30
+      max_retries: 2
+      temperature: 0.3
+    best:
+      provider: deepseek
+      model: deepseek-chat
+      timeout: 30
+      max_retries: 2
+      temperature: 0.3
+
+  tutoring:
+    normal:
+      provider: deepseek
+      model: deepseek-chat
+      timeout: 60
+      max_retries: 2
+      temperature: 0.7
+      stream: true
+    best:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      timeout: 60
+      max_retries: 2
+      temperature: 0.7
+      stream: true
+
+  assessment:
+    normal:
+      provider: dashscope
+      model: qwen-turbo
+      timeout: 15
+      max_retries: 2
+      temperature: 0.1
+    best:
+      provider: deepseek
+      model: deepseek-chat
+      timeout: 30
+      max_retries: 2
+      temperature: 0.1
+
+providers:
+  dashscope:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+  anthropic:
+    base_url: https://api.anthropic.com/v1
+    api_key_env: ANTHROPIC_API_KEY
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY

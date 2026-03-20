@@ -52,21 +52,16 @@ async def chat_stream(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),
 ):
-    # Save user message and get session
-    session, _user_msg = await svc.save_user_message(
+    _session, stream = await svc.chat_stream(
         db,
-        student_id,
-        body.session_id,
-        body.message,
-        body.subject_id,
-        body.task_id,
-        body.attachments,
+        student_id=student_id,
+        session_id=body.session_id,
+        message=body.message,
+        subject_id=body.subject_id,
+        task_id=body.task_id,
+        attachments=body.attachments,
     )
-    # Persist the stub assistant message now (content is deterministic in stub)
-    # In Phase 3, this will be replaced by assembling chunks after streaming.
-    await svc.save_stream_assistant_message(db, session.id)
-
-    return StreamingResponse(svc.chat_stream_stub(), media_type="text/event-stream")
+    return StreamingResponse(stream, media_type="text/event-stream")
 
 
 @router.get("/history", response_model=PaginatedResponse[QaSessionListItem])

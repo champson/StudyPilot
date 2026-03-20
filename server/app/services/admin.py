@@ -12,15 +12,20 @@ from app.models.student_profile import StudentProfile
 from app.models.system import ManualCorrection, ModelCallLog
 from app.models.upload import StudyUpload
 
-SYSTEM_MODE_KEY = "studypilot:system_mode"
+SYSTEM_MODE_KEY = "system:run_mode"
 
 
 async def get_system_mode(r: aioredis.Redis) -> str:
-    mode = await r.get(SYSTEM_MODE_KEY)
+    try:
+        mode = await r.get(SYSTEM_MODE_KEY)
+    except Exception:
+        return "normal"
     return mode or "normal"
 
 
 async def set_system_mode(r: aioredis.Redis, mode: str) -> str:
+    if mode not in {"normal", "best"}:
+        raise AppError("INVALID_MODE", "模式仅支持 normal 或 best", status_code=400)
     await r.set(SYSTEM_MODE_KEY, mode)
     return mode
 
