@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/app-header";
 import { Card } from "@/components/ui/card";
@@ -8,35 +8,43 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageSkeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
-import { mockDailyPlan } from "@/lib/mock-data";
+import { useDailyPlan } from "@/lib/hooks";
+import { api } from "@/lib/api";
 import { cn, formatDate, getWeekday, taskTypeLabels, modeLabels } from "@/lib/utils";
 import { getSubject } from "@/lib/subjects";
-import type { PlanTask, TaskStatus } from "@/types/api";
+import type { TaskStatus } from "@/types/api";
 
 export default function TodayPlanPage() {
-  const [loading, setLoading] = useState(true);
-  const [tasks, setTasks] = useState(mockDailyPlan.tasks);
   const router = useRouter();
   const { toast } = useToast();
-  const plan = mockDailyPlan;
+  const { data: plan, isLoading, mutate } = useDailyPlan();
+  const [generating, setGenerating] = useState(false);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 600);
-    return () => clearTimeout(timer);
-  }, []);
-
+  const tasks = plan?.tasks || [];
   const completedCount = tasks.filter((t) => t.status === "completed").length;
   const progressPercent = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
-  function updateTaskStatus(taskId: number, status: TaskStatus) {
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId
-          ? { ...t, status, ...(status === "completed" ? { completed_at: new Date().toISOString(), duration_minutes: t.estimated_minutes } : {}) }
-          : t
-      )
-    );
-    if (status === "completed") toast("任务已完成", "success");
+  async function updateTaskStatus(taskId: number, status: TaskStatus) {
+    try {
+      await api.patch(`/student/plan/tasks/${taskId}`, { status });
+      mutate();
+      if (status === "completed") toast("任务已完成", "success");
+    } catch {
+      toast("状态更新失败", "error");
+    }
+  }
+
+  async function handleGeneratePlan() {
+    setGenerating(true);
+    try {
+      await api.post("/student/plan/generate", {});
+      mutate();
+      toast("今日计划已生成", "success");
+    } catch {
+      toast("生成失败，请重试", "error");
+    } finally {
+      setGenerating(false);
+    }
   }
 
   const statusConfig: Record<TaskStatus, { label: string; dotClass: string; cardClass: string; lineClass: string }> = {
@@ -46,7 +54,21 @@ export default function TodayPlanPage() {
     pending: { label: "待开始", dotClass: "bg-gray-200 text-text-tertiary", cardClass: "border-dashed border-gray-200", lineClass: "bg-gray-200" },
   };
 
-  if (loading) return <><PageHeader title="今日学习计划" backHref="/dashboard" /><PageSkeleton /></>;
+  if (isLoading) return <><PageHeader title="今日学习计划" backHref="/dashboard" /><PageSkeleton /></>;
+
+  if (!plan) {
+    return (
+      <div className="min-h-screen bg-bg">
+        <PageHeader title="今日学习计划" backHref="/dashboard" />
+        <main className="max-w-3xl mx-auto px-4 md:px-6 py-4 md:py-6 text-center">
+          <Card className="py-12">
+            <p className="text-text-secondary mb-4">还没有今日计划</p>
+            <Button onClick={handleGeneratePlan} loading={generating}>生成今日计划</Button>
+          </Card>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-bg">
@@ -128,13 +150,13 @@ export default function TodayPlanPage() {
                     <p className="text-xs text-text-tertiary">预计用时：{task.estimated_minutes} 分钟</p>
                   ) : (
                     <div className="flex items-center gap-2 mt-2">
-                      <Button size="sm" onClick={() => updateTaskStatus(task.id, "completed")}>▶ 完成任务</Button>
-                      <button onClick={() => router.push("/qa")} className="text-xs text-primary hover:underline">💬 发起答疑</button>
+                      <Button size="sm" onClick={() => updateTaskStatus(task.id, "completed")}>完成任务</Button>
+                      <button onClick={() => router.push("/qa")} className="text-xs text-primary hover:underline">发起答疑</button>
                     </div>
                   )}
 
                   {task.status === "pending" && i === completedCount + (tasks.some((t) => t.status === "entered" || t.status === "executed") ? 1 : 0) && (
-                    <Button size="sm" className="mt-2" onClick={() => updateTaskStatus(task.id, "entered")}>▶ 开始学习</Button>
+                    <Button size="sm" className="mt-2" onClick={() => updateTaskStatus(task.id, "entered")}>开始学习</Button>
                   )}
                 </Card>
               </div>

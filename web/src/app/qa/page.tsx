@@ -1,16 +1,15 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/app-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import { mockQAMessages, mockQAHistory } from "@/lib/mock-data";
+import { getSubjectId } from "@/lib/subjects";
+import { useQAHistory } from "@/lib/hooks";
+import { streamRequest } from "@/lib/stream";
 import type { QAMessage, Subject } from "@/types/api";
-
-const SUBJECTS: Subject[] = ["语文", "数学", "英语", "物理", "化学"];
 
 const strategyLabels: Record<string, { label: string; class: string }> = {
   hint: { label: "提示", class: "bg-blue-50 text-blue-600" },
@@ -20,17 +19,27 @@ const strategyLabels: Record<string, { label: string; class: string }> = {
 };
 
 export default function QAPage() {
-  const [messages, setMessages] = useState<QAMessage[]>(mockQAMessages);
+  const [messages, setMessages] = useState<QAMessage[]>([
+    {
+      id: 0,
+      role: "assistant",
+      content: "你好！我是你的 AI 学习助教，遇到不会的题可以随时问我。\n你可以直接输入问题，或者拍照上传题目。",
+      created_at: new Date().toISOString(),
+    },
+  ]);
   const [input, setInput] = useState("");
-  const [subject, setSubject] = useState<Subject>("数学");
+  const [subject] = useState<Subject>("数学");
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [sessionId, setSessionId] = useState<number | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef(false);
   const { toast } = useToast();
-  const router = useRouter();
+
+  const { data: qaHistoryData } = useQAHistory(1, 20);
+  const qaHistory = qaHistoryData?.items || [];
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -41,58 +50,90 @@ export default function QAPage() {
   }, []);
 
   const sendMessage = useCallback(async () => {
-    if (!input.trim() || sending) return;
+    if (!input.trim() || sending || streaming) return;
+
+    const userContent = input.trim();
     const userMsg: QAMessage = {
       id: Date.now(),
       role: "user",
-      content: input.trim(),
+      content: userContent,
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setSending(true);
 
-    try {
-      // Simulate streaming response
-      await new Promise((r) => setTimeout(r, 800));
-      if (abortRef.current) return;
-      setSending(false);
-      setStreaming(true);
+    const aiMsgId = Date.now() + 1;
+    const aiMsg: QAMessage = {
+      id: aiMsgId,
+      role: "assistant",
+      content: "",
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, aiMsg]);
 
-      const responseText = "好的，让我来帮你分析这个问题。\n\n**📌 分析**\n这道题考查的是基础概念的理解和应用。\n\n**💡 思路**\n首先，我们需要明确题目中的已知条件，然后逐步推导。\n\n你先试着想一下第一步应该怎么做？";
+    setSending(false);
+    setStreaming(true);
 
-      const aiMsg: QAMessage = {
-        id: Date.now() + 1,
-        role: "assistant",
-        content: "",
-        tutoring_strategy: "step_by_step",
-        knowledge_points: ["相关知识点"],
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, aiMsg]);
-
-      // Simulate streaming
-      for (let i = 0; i <= responseText.length; i++) {
-        if (abortRef.current) break;
-        await new Promise((r) => setTimeout(r, 20));
-        if (abortRef.current) break;
-        setMessages((prev) =>
-          prev.map((m) => m.id === aiMsg.id ? { ...m, content: responseText.slice(0, i) } : m)
-        );
-      }
-    } finally {
-      if (!abortRef.current) {
-        setSending(false);
-        setStreaming(false);
-      }
-    }
-  }, [input, sending]);
+    await streamRequest("/student/qa/chat/stream", {
+      method: "POST",
+      body: {
+        message: userContent,
+        session_id: sessionId || undefined,
+        subject_id: getSubjectId(subject),
+      },
+      onMessage: (data) => {
+        if (abortRef.current) return;
+        try {
+          const event = JSON.parse(data);
+          if (event.type === "chunk") {
+            setMessages((prev) =>
+              prev.map((m) => m.id === aiMsgId
+                ? { ...m, content: m.content + event.content }
+                : m
+              )
+            );
+          } else if (event.type === "knowledge_points") {
+            setMessages((prev) =>
+              prev.map((m) => m.id === aiMsgId
+                ? { ...m, knowledge_points: event.data }
+                : m
+              )
+            );
+          } else if (event.type === "strategy") {
+            setMessages((prev) =>
+              prev.map((m) => m.id === aiMsgId
+                ? { ...m, tutoring_strategy: event.data }
+                : m
+              )
+            );
+          } else if (event.type === "session_id" && event.data) {
+            setSessionId(event.data);
+          }
+        } catch { /* ignore non-JSON lines */ }
+      },
+      onDone: () => {
+        if (!abortRef.current) setStreaming(false);
+      },
+      onError: () => {
+        if (!abortRef.current) {
+          setStreaming(false);
+          toast("回复生成失败，请重试", "error");
+        }
+      },
+    });
+  }, [input, sending, streaming, sessionId, subject, toast]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
+  }
+
+  function formatKnowledgePoints(kps: QAMessage["knowledge_points"]): string {
+    if (!kps || kps.length === 0) return "";
+    return kps.map((kp) => typeof kp === "string" ? kp : kp.name).join("、");
   }
 
   return (
@@ -119,16 +160,18 @@ export default function QAPage() {
           <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowHistory(false)} />
           <div className="fixed right-0 top-14 bottom-0 w-72 bg-card border-l border-border z-50 p-4 overflow-y-auto">
             <h3 className="font-semibold mb-3">历史会话</h3>
-            {mockQAHistory.map((s) => (
+            {qaHistory.length > 0 ? qaHistory.map((s) => (
               <button
                 key={s.id}
                 className="w-full text-left p-3 rounded-lg hover:bg-gray-50 mb-1 transition-colors"
                 onClick={() => setShowHistory(false)}
               >
-                <p className="text-sm font-medium">{s.title}</p>
-                <p className="text-xs text-text-tertiary">{s.subject} · {s.message_count}条消息</p>
+                <p className="text-sm font-medium">会话 #{s.id}</p>
+                <p className="text-xs text-text-tertiary">{s.message_count}条消息 · {new Date(s.created_at).toLocaleDateString("zh-CN")}</p>
               </button>
-            ))}
+            )) : (
+              <p className="text-sm text-text-tertiary">暂无历史会话</p>
+            )}
           </div>
         </>
       )}
@@ -145,7 +188,7 @@ export default function QAPage() {
                 {/* Strategy tag */}
                 {msg.tutoring_strategy && (
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-medium text-text-secondary">🤖 AI 助教</span>
+                    <span className="text-xs font-medium text-text-secondary">AI 助教</span>
                     <span className={cn("text-xs px-2 py-0.5 rounded-md", strategyLabels[msg.tutoring_strategy]?.class)}>
                       {strategyLabels[msg.tutoring_strategy]?.label}
                     </span>
@@ -171,7 +214,7 @@ export default function QAPage() {
                 {/* Knowledge points */}
                 {msg.knowledge_points && msg.knowledge_points.length > 0 && msg.content.length > 0 && !streaming && (
                   <div className="mt-3 pt-3 border-t border-border-light">
-                    <p className="text-xs text-text-tertiary">📚 关联知识点：{msg.knowledge_points.join("、")}</p>
+                    <p className="text-xs text-text-tertiary">关联知识点：{formatKnowledgePoints(msg.knowledge_points)}</p>
                   </div>
                 )}
               </div>
@@ -193,14 +236,14 @@ export default function QAPage() {
           <div ref={chatEndRef} />
         </div>
 
-        {/* Next Step Guide (shown after conversation) */}
+        {/* Next Step Guide */}
         {messages.length > 4 && !streaming && !sending && (
           <div className="mt-4 p-3 bg-card border border-border rounded-xl">
             <p className="text-sm text-text-secondary mb-2">下一步</p>
             <div className="flex gap-2 flex-wrap">
-              <Button variant="outline" size="sm">🔄 巩固练习</Button>
-              <Button variant="outline" size="sm">📝 类似题</Button>
-              <Button variant="outline" size="sm" onClick={() => document.querySelector("textarea")?.focus()}>❓ 继续追问</Button>
+              <Button variant="outline" size="sm">巩固练习</Button>
+              <Button variant="outline" size="sm">类似题</Button>
+              <Button variant="outline" size="sm" onClick={() => document.querySelector("textarea")?.focus()}>继续追问</Button>
             </div>
           </div>
         )}

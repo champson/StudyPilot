@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -17,6 +19,8 @@ class CorrectionOut(BaseModel):
     corrected_content: dict
     correction_reason: str | None = None
     corrected_by: int
+    status: str = "pending"
+    created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -25,6 +29,10 @@ class OcrCorrectionRequest(BaseModel):
     upload_id: int
     corrected_content: dict
     reason: str | None = None
+
+
+class ResolveCorrectionRequest(BaseModel):
+    corrected_content: dict | None = None
 
 
 class KnowledgeCorrectionRequest(BaseModel):

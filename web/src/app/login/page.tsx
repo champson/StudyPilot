@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
+import { loginWithToken, loginAdmin, saveAuth } from "@/lib/auth";
+import { api, ApiError } from "@/lib/api";
+import type { AuthResponse } from "@/types/api";
 
 export default function LoginPage() {
   const [role, setRole] = useState<"student" | "parent" | "admin">("student");
@@ -20,30 +23,64 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Mock login - in production, call API
-      await new Promise((r) => setTimeout(r, 800));
-
       if (role === "admin") {
         if (!username || !password) {
           toast("请填写用户名和密码", "error");
           return;
         }
-        localStorage.setItem("access_token", "mock_admin_token");
-        localStorage.setItem("user_role", "admin");
-        localStorage.setItem("user_name", "管理员");
+        const res = await loginAdmin(username, password);
+        saveAuth(res);
         router.push("/admin/dashboard");
       } else {
         if (!token) {
           toast("请输入登录令牌", "error");
           return;
         }
-        localStorage.setItem("access_token", "mock_token");
-        localStorage.setItem("user_role", role);
-        localStorage.setItem("user_name", role === "student" ? "小明" : "小明家长");
-        router.push(role === "student" ? "/dashboard" : "/parent/report/weekly");
+        const res = await loginWithToken(token, role);
+        saveAuth(res);
+        if (role === "student") {
+          if (!res.user.student_id) {
+            // First-time student: create profile, then refresh token to get student_id in JWT
+            try {
+              await api.post("/student/profile", { grade: "高一" });
+            } catch {
+              // Profile may already exist from a prior partial flow — continue
+            }
+            // Refresh token so JWT now contains the newly created student_id.
+            // Without this, all /student/* endpoints will 403 (student_id=null in JWT).
+            const refreshed = await api.post<AuthResponse>("/auth/refresh");
+            saveAuth(refreshed);
+            router.push("/onboarding");
+          } else {
+            // Existing student: check onboarding status
+            try {
+              const status = await api.get<{ onboarding_completed: boolean }>("/student/onboarding/status");
+              if (!status.onboarding_completed) {
+                router.push("/onboarding");
+              } else {
+                localStorage.setItem("onboarding_completed", "true");
+                router.push("/dashboard");
+              }
+            } catch {
+              router.push("/onboarding");
+            }
+          }
+        } else {
+          router.push("/parent/report/weekly");
+        }
       }
-    } catch {
-      toast("登录失败，请重试", "error");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === "INVALID_TOKEN") {
+          toast("登录令牌无效，请联系管理员", "error");
+        } else if (err.code === "INVALID_CREDENTIALS") {
+          toast("用户名或密码错误", "error");
+        } else {
+          toast(err.message || "登录失败，请重试", "error");
+        }
+      } else {
+        toast("网络错误，请检查连接", "error");
+      }
     } finally {
       setLoading(false);
     }

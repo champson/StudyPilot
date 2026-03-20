@@ -14,6 +14,7 @@ from app.schemas.admin import (
     MetricsTodayOut,
     ModelCallsOut,
     OcrCorrectionRequest,
+    ResolveCorrectionRequest,
     SystemModeOut,
     SystemModeUpdate,
 )
@@ -82,6 +83,18 @@ async def correct_knowledge(
     correction = await svc.correct_knowledge(
         db, user.id, body.student_id, body.knowledge_point_id, body.new_status, body.reason
     )
+    return SuccessResponse(data=CorrectionOut.model_validate(correction))
+
+
+@router.post("/corrections/{correction_id}/resolve", response_model=SuccessResponse[CorrectionOut])
+async def resolve_correction(
+    correction_id: int,
+    body: ResolveCorrectionRequest | None = None,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    corrected_content = body.corrected_content if body else None
+    correction = await svc.resolve_correction(db, user.id, correction_id, corrected_content)
     return SuccessResponse(data=CorrectionOut.model_validate(correction))
 
 

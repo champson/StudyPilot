@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { clearAuth } from "@/lib/auth";
 
 interface AppHeaderProps {
   showMode?: boolean;
@@ -78,7 +79,7 @@ export function AppHeader({ showMode, currentMode, onModeChange, userName = "小
               <div className="absolute top-full mt-1 right-0 bg-card border border-border rounded-lg shadow-lg z-20 py-1 min-w-[120px]">
                 <button onClick={() => { router.push("/report/weekly"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">周报</button>
                 <hr className="my-1 border-border-light" />
-                <button onClick={() => { localStorage.removeItem("access_token"); router.push("/login"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-error hover:bg-gray-50">退出登录</button>
+                <button onClick={() => { clearAuth(); router.push("/login"); setShowUserMenu(false); }} className="w-full text-left px-4 py-2 text-sm text-error hover:bg-gray-50">退出登录</button>
               </div>
             </>
           )}

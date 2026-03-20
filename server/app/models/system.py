@@ -43,6 +43,9 @@ class ManualCorrection(Base):
     corrected_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     correction_reason: Mapped[str | None] = mapped_column(Text)
     corrected_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -1,4 +1,4 @@
-import { getToken } from "./api";
+import { getToken, AUTH_STORAGE_KEYS } from "./api";
 import { env } from "./env";
 
 export interface StreamOptions {
@@ -37,6 +37,12 @@ export async function streamRequest(path: string, options: StreamOptions = {}) {
     });
 
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        if (typeof window !== "undefined") {
+          for (const key of AUTH_STORAGE_KEYS) localStorage.removeItem(key);
+          window.location.href = "/login";
+        }
+      }
       throw new Error(`HTTP Error: ${response.status}`);
     }
 

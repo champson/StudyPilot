@@ -37,10 +37,21 @@ class StudentProfileUpdate(BaseModel):
     current_progress: dict | None = None
 
 
+class ExamScheduleIn(BaseModel):
+    exam_type: str
+    exam_date: str
+    subjects: list[str] = Field(default_factory=list)
+
+
 class OnboardingSubmit(BaseModel):
     grade: str | None = None
     textbook_version: str | dict | None = None
     subject_combination: list[str | int] = Field(default_factory=list)
+    class_rank: int | None = None
+    grade_rank: int | None = None
+    class_total: int | None = None
+    grade_total: int | None = None
+    exam_schedules: list[ExamScheduleIn] = Field(default_factory=list)
     weak_subjects: list[int | str] = Field(default_factory=list)
     low_score_subjects: list[int | str] = Field(default_factory=list)
     recent_exam_scores: dict[str, float] = Field(default_factory=dict)

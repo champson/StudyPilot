@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/app-header";
 import { Card } from "@/components/ui/card";
@@ -10,26 +10,18 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { CardSkeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn, entryReasonLabels } from "@/lib/utils";
-import { mockErrors, mockErrorSummary } from "@/lib/mock-data";
 import { getSubject } from "@/lib/subjects";
+import { useErrorList, useErrorSummary } from "@/lib/hooks";
+import { api } from "@/lib/api";
 import type { ErrorBookItem } from "@/types/api";
 
-type ErrorFilter = "all" | "not_explained" | "explained_not_recalled" | "recalled";
+type ErrorFilter = "all" | "not_recalled" | "recalled";
 
 const FILTER_OPTIONS: { value: ErrorFilter; label: string }[] = [
   { value: "all", label: "全部" },
-  { value: "not_explained", label: "未讲解" },
-  { value: "explained_not_recalled", label: "待召回" },
+  { value: "not_recalled", label: "待召回" },
   { value: "recalled", label: "已召回" },
 ];
-
-function matchesFilter(e: ErrorBookItem, filter: ErrorFilter): boolean {
-  if (filter === "all") return true;
-  if (filter === "not_explained") return !e.is_explained;
-  if (filter === "explained_not_recalled") return e.is_explained && !e.is_recalled;
-  if (filter === "recalled") return e.is_recalled;
-  return true;
-}
 
 function getStatusDisplay(e: ErrorBookItem): { label: string; color: string } {
   if (!e.is_explained) return { label: "未讲解", color: "text-text-secondary bg-gray-100" };
@@ -39,41 +31,54 @@ function getStatusDisplay(e: ErrorBookItem): { label: string; color: string } {
 }
 
 export default function ErrorsPage() {
-  const [loading, setLoading] = useState(true);
-  const [errors, setErrors] = useState<ErrorBookItem[]>(mockErrors);
   const [selectedSubject, setSelectedSubject] = useState<string>("all");
   const [selectedFilter, setSelectedFilter] = useState<ErrorFilter>("all");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const router = useRouter();
   const { toast } = useToast();
-  const summary = mockErrorSummary;
 
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 600);
-    return () => clearTimeout(timer);
-  }, []);
+  const { data: summary, mutate: mutateSummary } = useErrorSummary();
+  const isRecalled = selectedFilter === "recalled" ? true : selectedFilter === "not_recalled" ? false : undefined;
+  const subjectId = selectedSubject !== "all"
+    ? summary?.by_subject.find(s => s.subject_name === selectedSubject)?.subject_id
+    : undefined;
 
-  const filteredErrors = errors.filter((e) => {
-    if (selectedSubject !== "all" && getSubject(e.subject_id).name !== selectedSubject) return false;
-    if (!matchesFilter(e, selectedFilter)) return false;
-    const text = e.question_content.text ?? "";
-    if (search && !text.includes(search) && !e.knowledge_points.some((k) => k.name.includes(search))) return false;
-    return true;
+  const { data: errorsData, isLoading, mutate: mutateErrors } = useErrorList({
+    subject_id: subjectId,
+    is_recalled: isRecalled,
+    page,
+    page_size: 20,
   });
 
-  function handleRecall(errorId: number) {
-    setErrors((prev) =>
-      prev.map((e) => e.id === errorId ? { ...e, is_recalled: true, last_recall_at: new Date().toISOString(), last_recall_result: "success", recall_count: e.recall_count + 1 } : e)
-    );
-    toast("召回练习完成", "success");
+  const errors: ErrorBookItem[] = errorsData?.items || [];
+  const total = errorsData?.total || 0;
+
+  // Client-side search filter (on top of server-side filters)
+  const filteredErrors = search
+    ? errors.filter((e) => {
+        const text = e.question_content.text ?? "";
+        return text.includes(search) || e.knowledge_points.some((k) => k.name.includes(search));
+      })
+    : errors;
+
+  async function handleRecall(errorId: number, result: "correct" | "incorrect" | "partial" = "correct") {
+    try {
+      await api.post(`/student/errors/${errorId}/recall`, { result });
+      mutateErrors();
+      mutateSummary();
+      toast("召回练习完成", "success");
+    } catch {
+      toast("操作失败", "error");
+    }
   }
 
   const subjectTabs = [
-    { value: "all" as const, label: "全部", count: summary.total },
-    ...summary.by_subject.map((s) => ({ value: s.subject_name, label: s.subject_name, count: s.count })),
+    { value: "all" as const, label: "全部", count: summary?.total ?? 0 },
+    ...(summary?.by_subject.map((s) => ({ value: s.subject_name, label: s.subject_name, count: s.count })) || []),
   ];
 
-  if (loading) return <><PageHeader title="错题本" backHref="/dashboard" /><div className="max-w-4xl mx-auto px-4 py-4 space-y-4"><CardSkeleton /><CardSkeleton /><CardSkeleton /></div></>;
+  if (isLoading && !errorsData) return <><PageHeader title="错题本" backHref="/dashboard" /><div className="max-w-4xl mx-auto px-4 py-4 space-y-4"><CardSkeleton /><CardSkeleton /><CardSkeleton /></div></>;
 
   return (
     <div className="min-h-screen bg-bg">
@@ -85,7 +90,7 @@ export default function ErrorsPage() {
           {subjectTabs.map((tab) => (
             <button
               key={tab.value}
-              onClick={() => setSelectedSubject(tab.value)}
+              onClick={() => { setSelectedSubject(tab.value); setPage(1); }}
               className={cn(
                 "px-4 py-2 rounded-lg text-sm whitespace-nowrap transition-colors shrink-0",
                 selectedSubject === tab.value
@@ -102,36 +107,32 @@ export default function ErrorsPage() {
         <div className="flex items-center gap-3 mb-4 flex-wrap">
           <select
             value={selectedFilter}
-            onChange={(e) => setSelectedFilter(e.target.value as ErrorFilter)}
+            onChange={(e) => { setSelectedFilter(e.target.value as ErrorFilter); setPage(1); }}
             className="px-3 py-2 border border-border rounded-lg text-sm bg-card"
           >
             {FILTER_OPTIONS.map((s) => <option key={s.value} value={s.value}>状态：{s.label}</option>)}
-          </select>
-          <select className="px-3 py-2 border border-border rounded-lg text-sm bg-card">
-            <option>排序：最新入库</option>
-            <option>排序：最久未复习</option>
           </select>
           <div className="flex-1 min-w-[200px]">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="🔍 搜索题目或知识点..."
+              placeholder="搜索题目或知识点..."
               className="w-full px-3 py-2 border border-border rounded-lg text-sm bg-card focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </div>
         </div>
 
         {/* Recall Banner */}
-        {summary.unrecalled > 0 && (
+        {summary && summary.unrecalled > 0 && (
           <Card className="mb-4 bg-error-light border-error/20">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-error">🔔 待召回提醒</p>
+                <p className="text-sm font-medium text-error">待召回提醒</p>
                 <p className="text-sm text-text-secondary mt-1">
-                  你有 <strong className="text-error">{summary.unrecalled}</strong> 道错题需要再次召回，巩固后可提升掌握度
+                  你有 <strong className="text-error">{summary.unrecalled}</strong> 道错题需要再次召回
                 </p>
               </div>
-              <Button size="sm" variant="danger">🔄 开始召回练习</Button>
+              <Button size="sm" variant="danger" onClick={() => { setSelectedFilter("not_recalled"); setPage(1); }}>开始召回练习</Button>
             </div>
           </Card>
         )}
@@ -159,27 +160,27 @@ export default function ErrorsPage() {
 
                   <p className="text-sm text-text-primary mb-3 leading-relaxed">{error.question_content.text}</p>
 
-                  {error.question_image_url && (
-                    <div className="w-40 h-28 bg-gray-100 rounded-lg mb-3 flex items-center justify-center text-text-tertiary text-xs">[题目图片]</div>
-                  )}
-
                   <div className="space-y-1.5 mb-3">
-                    <p className="text-xs text-text-secondary">📚 知识点：{error.knowledge_points.map((k) => k.name).join("、")}</p>
-                    <p className="text-xs text-text-secondary">❌ 错误类型：{error.error_type}</p>
-                    <p className="text-xs text-text-secondary">📥 入库原因：{entryReasonLabels[error.entry_reason]}</p>
+                    <p className="text-xs text-text-secondary">知识点：{error.knowledge_points.map((k) => k.name).join("、")}</p>
+                    {error.error_type && <p className="text-xs text-text-secondary">错误类型：{error.error_type}</p>}
+                    <p className="text-xs text-text-secondary">入库原因：{entryReasonLabels[error.entry_reason]}</p>
                   </div>
 
                   {error.last_recall_at && (
                     <p className="text-xs text-text-tertiary mb-3">
-                      ✅ 召回结果：{error.last_recall_result === "success" ? "成功" : "失败"} · {new Date(error.last_recall_at).toLocaleDateString("zh-CN")}
+                      召回结果：{error.last_recall_result === "success" ? "成功" : "失败"} · {new Date(error.last_recall_at).toLocaleDateString("zh-CN")}
                     </p>
                   )}
 
                   <div className="flex items-center gap-2 pt-3 border-t border-border-light">
                     <p className="text-xs text-text-tertiary flex-1">入库时间：{new Date(error.created_at).toLocaleDateString("zh-CN")}</p>
-                    <Button variant="outline" size="sm" onClick={() => router.push("/qa")}>📖 查看讲解</Button>
+                    <Button variant="outline" size="sm" onClick={() => router.push("/qa")}>查看讲解</Button>
                     {!error.is_recalled && (
-                      <Button variant="primary" size="sm" onClick={() => handleRecall(error.id)}>🔄 再次召回</Button>
+                      <div className="flex items-center gap-1">
+                        <Button variant="primary" size="sm" onClick={() => handleRecall(error.id, "correct")}>已掌握</Button>
+                        <Button variant="outline" size="sm" onClick={() => handleRecall(error.id, "partial")}>部分掌握</Button>
+                        <Button variant="outline" size="sm" onClick={() => handleRecall(error.id, "incorrect")}>未掌握</Button>
+                      </div>
                     )}
                   </div>
                 </Card>
@@ -188,9 +189,12 @@ export default function ErrorsPage() {
           </div>
         )}
 
-        {filteredErrors.length > 0 && (
-          <div className="text-center py-8">
-            <button className="text-sm text-text-tertiary hover:text-primary transition-colors">加载更多...</button>
+        {/* Pagination */}
+        {total > 20 && (
+          <div className="flex justify-center gap-2 py-6">
+            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一页</Button>
+            <span className="text-sm text-text-secondary self-center">第 {page} 页</span>
+            <Button variant="outline" size="sm" disabled={page * 20 >= total} onClick={() => setPage(p => p + 1)}>下一页</Button>
           </div>
         )}
       </main>

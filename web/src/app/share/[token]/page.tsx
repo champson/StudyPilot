@@ -1,25 +1,35 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
+import useSWR from "swr";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageSkeleton } from "@/components/ui/skeleton";
 import { riskLevelLabels, formatMinutes } from "@/lib/utils";
-import { mockShareReport } from "@/lib/mock-data";
+import type { ShareReport } from "@/types/api";
+import { env } from "@/lib/env";
+
+// Direct fetch without auth for public share links
+async function fetchShare(path: string): Promise<ShareReport> {
+  const res = await fetch(`${env.NEXT_PUBLIC_API_BASE}${path}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: { code: "UNKNOWN" } }));
+    throw { status: res.status, code: body.error?.code || "UNKNOWN" };
+  }
+  const json = await res.json();
+  return json.data;
+}
 
 export default function ShareReportPage() {
   const params = useParams();
-  const [loading, setLoading] = useState(true);
-  const [expired, setExpired] = useState(false);
-  const report = mockShareReport;
+  const token = params.token as string;
 
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 800);
-    return () => clearTimeout(timer);
-  }, []);
+  const { data: report, error, isLoading } = useSWR(
+    token ? `/share/${token}` : null,
+    fetchShare
+  );
 
-  if (loading) return (
+  if (isLoading) return (
     <div className="min-h-screen bg-bg">
       <div className="max-w-2xl mx-auto px-4 py-8">
         <div className="text-center mb-6">
@@ -31,27 +41,27 @@ export default function ShareReportPage() {
     </div>
   );
 
-  if (expired) return (
+  if (error) return (
     <div className="min-h-screen bg-bg flex items-center justify-center px-4">
       <Card className="text-center max-w-sm">
         <p className="text-4xl mb-4">⏰</p>
-        <h2 className="text-lg font-semibold mb-2">链接已过期</h2>
-        <p className="text-sm text-text-secondary">此分享链接已超过有效期，请联系学生获取新的分享链接</p>
+        <h2 className="text-lg font-semibold mb-2">链接已过期或无效</h2>
+        <p className="text-sm text-text-secondary">此分享链接已超过有效期或无效，请联系学生获取新的分享链接</p>
       </Card>
     </div>
   );
 
+  if (!report) return null;
+
   return (
     <div className="min-h-screen bg-bg">
       <div className="max-w-2xl mx-auto px-4 py-6 md:py-8">
-        {/* Header */}
         <div className="text-center mb-6">
           <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center text-white font-bold mx-auto mb-3">AI</div>
           <h1 className="text-xl font-bold text-text-primary">{report.student_name}的学习周报</h1>
           <p className="text-sm text-text-secondary mt-1">{report.report_week} · 由 AI 伴学教练生成</p>
         </div>
 
-        {/* Summary Metrics */}
         <div className="grid grid-cols-2 gap-3 mb-6">
           <Card className="text-center">
             <p className="text-xs text-text-tertiary">学习天数</p>
@@ -63,7 +73,6 @@ export default function ShareReportPage() {
           </Card>
         </div>
 
-        {/* Trend Overview */}
         {report.trend_overview && (
           <Card className="mb-4">
             <CardTitle>趋势概览</CardTitle>
@@ -71,7 +80,6 @@ export default function ShareReportPage() {
           </Card>
         )}
 
-        {/* Subject Risk Overview */}
         <Card className="mb-4">
           <CardTitle>各学科概览</CardTitle>
           <div className="space-y-3">
@@ -87,7 +95,6 @@ export default function ShareReportPage() {
           </div>
         </Card>
 
-        {/* Suggestions */}
         {report.next_stage_suggestions_summary && (
           <Card className="mb-6">
             <CardTitle>建议</CardTitle>
@@ -95,7 +102,6 @@ export default function ShareReportPage() {
           </Card>
         )}
 
-        {/* Footer */}
         <div className="text-center space-y-2">
           {report.expires_at && (
             <p className="text-xs text-text-tertiary">有效期至：{new Date(report.expires_at).toLocaleDateString("zh-CN")}</p>

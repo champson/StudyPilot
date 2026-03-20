@@ -23,3 +23,11 @@ const SUBJECT_MAP: Record<number, SubjectInfo> = {
 export function getSubject(id: number): SubjectInfo {
   return SUBJECT_MAP[id] ?? { name: "未知" as Subject, icon: "📄" };
 }
+
+const NAME_TO_ID: Record<string, number> = Object.fromEntries(
+  Object.entries(SUBJECT_MAP).map(([id, info]) => [info.name, Number(id)])
+);
+
+export function getSubjectId(name: string): number {
+  return NAME_TO_ID[name] ?? 0;
+}

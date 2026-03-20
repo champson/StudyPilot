@@ -1,8 +1,10 @@
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
-from app.models.student_profile import StudentProfile
+from app.models.student_profile import ExamRecord, StudentProfile
 from app.models.subject import Subject
 from app.schemas.student_profile import (
     OnboardingSubmit,
@@ -72,10 +74,39 @@ async def submit_onboarding(
         profile.grade = data.grade
     if isinstance(data.textbook_version, str):
         profile.textbook_version = data.textbook_version
+    if data.class_rank is not None:
+        profile.class_rank = data.class_rank
+    if data.grade_rank is not None:
+        profile.grade_rank = data.grade_rank
     if data.subject_combination:
         profile.subject_combination = list(data.subject_combination)
+    # Build upcoming_exams from exam_schedules (preferred) or legacy upcoming_exam_date
+    upcoming: list[dict] = []
+    if data.exam_schedules:
+        for es in data.exam_schedules:
+            upcoming.append({
+                "exam_type": es.exam_type,
+                "exam_date": es.exam_date,
+                "subjects": es.subjects,
+            })
+            # Create ExamRecord rows so planner can consume structured exam data
+            subject_ids = await _resolve_subject_ids(db, es.subjects)
+            for sid in subject_ids:
+                try:
+                    exam_date = date.fromisoformat(es.exam_date)
+                except ValueError:
+                    continue
+                db.add(ExamRecord(
+                    student_id=student_id,
+                    exam_type=es.exam_type,
+                    exam_date=exam_date,
+                    subject_id=sid,
+                    created_by="onboarding",
+                ))
     if data.upcoming_exam_date:
-        profile.upcoming_exams = [{"date": data.upcoming_exam_date.isoformat()}]
+        upcoming.append({"date": data.upcoming_exam_date.isoformat()})
+    if upcoming:
+        profile.upcoming_exams = upcoming
 
     weak_subject_ids = await _resolve_subject_ids(db, data.weak_subjects)
     low_score_subject_ids = await _resolve_subject_ids(db, data.low_score_subjects)

@@ -124,38 +124,63 @@ export interface PlanTask {
   duration_minutes?: number;
 }
 
-// --- Upload ---
+// --- Upload (matches UploadOut) ---
 export type UploadType = "note" | "homework" | "test" | "handout" | "score";
 export type OcrStatus = "pending" | "processing" | "completed" | "failed";
 
 export interface StudyUpload {
   id: number;
+  student_id: number;
   upload_type: UploadType;
-  subject?: Subject;
-  note?: string;
-  file_urls: string[];
+  subject_id: number | null;
+  file_hash: string;
+  original_url: string;
+  thumbnail_url?: string;
   ocr_status: OcrStatus;
+  ocr_result?: Record<string, unknown>;
+  ocr_error?: string;
   created_at: string;
 }
 
-// --- QA ---
+// --- QA (matches QaSessionListItem / QaMessageOut) ---
 export interface QASession {
   id: number;
-  subject?: Subject;
-  title: string;
-  message_count: number;
+  session_date: string;
+  subject_id: number | null;
+  status: string;
   created_at: string;
-  updated_at: string;
+  message_count: number;
+}
+
+export interface QASessionDetail {
+  id: number;
+  student_id: number;
+  session_date: string;
+  task_id: number | null;
+  subject_id: number | null;
+  status: string;
+  structured_summary: Record<string, unknown> | null;
+  created_at: string;
+  closed_at: string | null;
+  messages: QAMessage[];
 }
 
 export interface QAMessage {
   id: number;
+  session_id?: number;
   role: "user" | "assistant";
   content: string;
   attachments?: string[];
+  intent?: string;
   tutoring_strategy?: "hint" | "step_by_step" | "formula" | "full_solution";
-  knowledge_points?: string[];
+  knowledge_points?: Array<{ id?: number; name: string } | string>;
   created_at: string;
+}
+
+export interface ChatResponse {
+  session_id: number;
+  user_message: QAMessage;
+  assistant_message: QAMessage;
 }
 
 // --- Error Book (matches ErrorBookOut / ErrorSummaryOut) ---
@@ -271,26 +296,37 @@ export interface ShareReport {
 }
 
 // --- Admin ---
+// Matches CorrectionOut
 export interface CorrectionItem {
   id: number;
-  type: "ocr" | "knowledge" | "plan" | "qa";
-  student_name: string;
-  description: string;
-  status: "pending" | "resolved" | "dismissed";
+  target_type: string;
+  target_id: number;
+  original_content: Record<string, unknown> | null;
+  corrected_content: Record<string, unknown>;
+  correction_reason: string | null;
+  corrected_by: number;
+  status: string;
   created_at: string;
-  original_data: Record<string, unknown>;
-  corrected_data?: Record<string, unknown>;
 }
 
+// Matches MetricsTodayOut
 export interface SystemMetrics {
   active_students: number;
-  total_plans_today: number;
-  total_qa_sessions_today: number;
-  total_uploads_today: number;
-  llm_calls_today: number;
-  llm_cost_today: number;
-  avg_response_time_ms: number;
-  error_rate: number;
-  ocr_success_rate: number;
-  fallback_rate: number;
+  plans_generated: number;
+  uploads: number;
+  qa_sessions: number;
+}
+
+// Matches HealthOut
+export interface HealthStatus {
+  database: string;
+  redis: string;
+  celery: string;
+}
+
+// Matches ModelCallsOut
+export interface ModelCallsData {
+  total: number;
+  by_agent: Array<{ agent?: string; count?: number; [key: string]: unknown }>;
+  by_provider: Array<{ provider?: string; count?: number; [key: string]: unknown }>;
 }

@@ -14,16 +14,16 @@ const navItems = [
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [authorized, setAuthorized] = useState(false);
+  const [authorized] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("user_role") === "admin";
+  });
 
   useEffect(() => {
-    const role = localStorage.getItem("user_role");
-    if (role !== "admin") {
+    if (!authorized) {
       router.replace("/login");
-    } else {
-      setAuthorized(true);
     }
-  }, [router]);
+  }, [authorized, router]);
 
   if (!authorized) return null;
 

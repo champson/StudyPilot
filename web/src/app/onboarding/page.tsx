@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 import type { Grade, Subject, ExamType, ExamSchedule } from "@/types/api";
 
 const STEPS = ["年级", "教材", "排名", "选科", "考试"];
@@ -14,49 +15,48 @@ const REQUIRED_SUBJECTS: Subject[] = ["语文", "数学", "英语"];
 const ELECTIVE_SUBJECTS: Subject[] = ["物理", "化学", "地理", "政治", "生物", "历史"];
 const EXAM_TYPES: ExamType[] = ["周测", "月考", "期中", "期末"];
 
+function loadDraft(): Record<string, unknown> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const saved = localStorage.getItem("onboarding_draft");
+    return saved ? JSON.parse(saved) : null;
+  } catch { return null; }
+}
+
 export default function OnboardingPage() {
-  const [step, setStep] = useState(0);
-  const [grade, setGrade] = useState<Grade | null>(null);
-  const [textbookVersion, setTextbookVersion] = useState("沪教版");
-  const [classRank, setClassRank] = useState("");
-  const [gradeRank, setGradeRank] = useState("");
-  const [classTotal, setClassTotal] = useState("");
-  const [gradeTotal, setGradeTotal] = useState("");
-  const [electives, setElectives] = useState<Subject[]>([]);
-  const [exams, setExams] = useState<ExamSchedule[]>([]);
+  const [draft] = useState(loadDraft);
+  const [step, setStep] = useState(() => (draft?.step as number) || 0);
+  const [grade, setGrade] = useState<Grade | null>(() => (draft?.grade as Grade) || null);
+  const [textbookVersion, setTextbookVersion] = useState(() => (draft?.textbookVersion as string) || "沪教版");
+  const [classRank, setClassRank] = useState(() => (draft?.classRank as string) || "");
+  const [gradeRank, setGradeRank] = useState(() => (draft?.gradeRank as string) || "");
+  const [classTotal, setClassTotal] = useState(() => (draft?.classTotal as string) || "");
+  const [gradeTotal, setGradeTotal] = useState(() => (draft?.gradeTotal as string) || "");
+  const [electives, setElectives] = useState<Subject[]>(() => (draft?.electives as Subject[]) || []);
+  const [exams, setExams] = useState<ExamSchedule[]>(() => (draft?.exams as ExamSchedule[]) || []);
   const [submitting, setSubmitting] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
+  const hydrated = true;
   const examIdRef = useRef(0);
   const router = useRouter();
   const { toast } = useToast();
 
-  // Check if onboarding already completed → redirect to dashboard
+  // Check if onboarding already completed
   useEffect(() => {
-    const completed = localStorage.getItem("onboarding_completed");
-    if (completed === "true") {
-      router.replace("/dashboard");
-    }
-  }, [router]);
-
-  // Restore ALL fields from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem("onboarding_draft");
-    if (saved) {
+    async function check() {
       try {
-        const data = JSON.parse(saved);
-        if (data.grade) setGrade(data.grade);
-        if (data.textbookVersion) setTextbookVersion(data.textbookVersion);
-        if (data.classRank) setClassRank(data.classRank);
-        if (data.gradeRank) setGradeRank(data.gradeRank);
-        if (data.classTotal) setClassTotal(data.classTotal);
-        if (data.gradeTotal) setGradeTotal(data.gradeTotal);
-        if (data.electives) setElectives(data.electives);
-        if (data.exams) setExams(data.exams);
-        if (data.step) setStep(data.step);
-      } catch { /* ignore */ }
+        const status = await api.get<{ onboarding_completed: boolean }>("/student/onboarding/status");
+        if (status.onboarding_completed) {
+          router.replace("/dashboard");
+        }
+      } catch {
+        // If API fails, check localStorage fallback
+        if (localStorage.getItem("onboarding_completed") === "true") {
+          router.replace("/dashboard");
+        }
+      }
     }
-    setHydrated(true);
-  }, []);
+    check();
+  }, [router]);
 
   // Persist ALL fields to localStorage
   useEffect(() => {
@@ -85,12 +85,21 @@ export default function OnboardingPage() {
   async function handleSubmit() {
     setSubmitting(true);
     try {
-      // Mock API call
-      await new Promise((r) => setTimeout(r, 1000));
+      const subjects = [...REQUIRED_SUBJECTS, ...electives];
+      await api.post("/student/onboarding/submit", {
+        grade,
+        textbook_version: textbookVersion,
+        class_rank: classRank ? parseInt(classRank) : undefined,
+        grade_rank: gradeRank ? parseInt(gradeRank) : undefined,
+        class_total: classTotal ? parseInt(classTotal) : undefined,
+        grade_total: gradeTotal ? parseInt(gradeTotal) : undefined,
+        subject_combination: subjects,
+        exam_schedules: exams.filter(e => e.exam_date),
+      });
       localStorage.removeItem("onboarding_draft");
       localStorage.setItem("onboarding_completed", "true");
       toast("建档完成！正在跳转工作台...", "success");
-      setTimeout(() => router.push("/dashboard"), 1500);
+      setTimeout(() => router.push("/dashboard"), 1000);
     } catch {
       toast("提交失败，请重试", "error");
       setSubmitting(false);

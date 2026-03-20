@@ -33,11 +33,15 @@ async def set_system_mode(r: aioredis.Redis, mode: str) -> str:
 async def get_pending_corrections(
     db: AsyncSession, page: int, page_size: int
 ) -> tuple[list[ManualCorrection], int]:
-    count_result = await db.execute(select(func.count(ManualCorrection.id)))
+    pending_filter = ManualCorrection.status == "pending"
+    count_result = await db.execute(
+        select(func.count(ManualCorrection.id)).where(pending_filter)
+    )
     total = count_result.scalar() or 0
 
     result = await db.execute(
         select(ManualCorrection)
+        .where(pending_filter)
         .order_by(ManualCorrection.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -66,10 +70,12 @@ async def correct_ocr(
         corrected_content=corrected_content,
         correction_reason=reason,
         corrected_by=admin_user_id,
+        status="resolved",
     )
     db.add(correction)
 
     upload.ocr_result = corrected_content
+    upload.ocr_status = "completed"
     upload.is_manual_corrected = True
     await db.flush()
     return correction
@@ -96,16 +102,80 @@ async def correct_knowledge(
     correction = ManualCorrection(
         target_type="knowledge",
         target_id=status.id,
-        original_content={"status": status.status},
+        original_content={
+            "status": status.status,
+            "student_id": student_id,
+            "knowledge_point_id": knowledge_point_id,
+        },
         corrected_content={"status": new_status},
         correction_reason=reason,
         corrected_by=admin_user_id,
+        status="resolved",
     )
     db.add(correction)
 
     status.status = new_status
     status.is_manual_corrected = True
     status.last_update_reason = f"admin_correction: {reason or ''}"
+    await db.flush()
+    return correction
+
+
+async def resolve_correction(
+    db: AsyncSession,
+    admin_user_id: int,
+    correction_id: int,
+    corrected_content: dict | None = None,
+) -> ManualCorrection:
+    result = await db.execute(
+        select(ManualCorrection).where(ManualCorrection.id == correction_id)
+    )
+    correction = result.scalar_one_or_none()
+    if not correction:
+        raise AppError("CORRECTION_NOT_FOUND", "纠偏记录不存在", status_code=404)
+    if correction.status == "resolved":
+        raise AppError("ALREADY_RESOLVED", "该纠偏已处理", status_code=409)
+
+    if corrected_content is not None:
+        correction.corrected_content = corrected_content
+
+    if correction.target_type == "ocr":
+        # OCR corrections require real text content to be resolved
+        ocr_content = correction.corrected_content or {}
+        has_real_content = bool(ocr_content.get("text"))
+        if not has_real_content:
+            raise AppError(
+                "OCR_CONTENT_REQUIRED",
+                "OCR 纠偏需要提供修正后的文本内容",
+                status_code=400,
+            )
+        upload_result = await db.execute(
+            select(StudyUpload).where(StudyUpload.id == correction.target_id)
+        )
+        upload = upload_result.scalar_one_or_none()
+        if upload:
+            upload.ocr_result = correction.corrected_content
+            upload.ocr_status = "completed"
+            upload.is_manual_corrected = True
+    elif correction.target_type == "knowledge":
+        original = correction.original_content or {}
+        sid = original.get("student_id")
+        kpid = original.get("knowledge_point_id")
+        new_status = (correction.corrected_content or {}).get("status")
+        if sid and kpid and new_status:
+            status_result = await db.execute(
+                select(StudentKnowledgeStatus).where(
+                    StudentKnowledgeStatus.student_id == sid,
+                    StudentKnowledgeStatus.knowledge_point_id == kpid,
+                )
+            )
+            sk = status_result.scalar_one_or_none()
+            if sk:
+                sk.status = new_status
+                sk.is_manual_corrected = True
+                sk.last_update_reason = f"admin_correction: {correction.correction_reason or ''}"
+
+    correction.status = "resolved"
     await db.flush()
     return correction
 

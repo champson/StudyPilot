@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     MODEL_CONFIG_PATH: str = "config/model_config.yaml"
     OCR_SYNC_FALLBACK: bool = False
 
+    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+
     DEBUG: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}

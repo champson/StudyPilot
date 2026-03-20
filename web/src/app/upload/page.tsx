@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
 import { PageHeader } from "@/components/layout/app-header";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { cn, uploadTypeLabels, formatRelativeTime } from "@/lib/utils";
-import { mockRecentUploads } from "@/lib/mock-data";
+import { getSubject, getSubjectId } from "@/lib/subjects";
+import { useRecentUploads } from "@/lib/hooks";
+import { api } from "@/lib/api";
 import type { UploadType, Subject, OcrStatus } from "@/types/api";
 
 const UPLOAD_TYPES: { value: UploadType; label: string; icon: string }[] = [
@@ -23,8 +23,10 @@ const SUBJECTS: Subject[] = ["语文", "数学", "英语", "物理", "化学"];
 
 interface PreviewImage {
   id: string;
+  file: File;
   url: string;
   ocrStatus: OcrStatus;
+  uploadId?: number;
 }
 
 export default function UploadPage() {
@@ -32,23 +34,33 @@ export default function UploadPage() {
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [note, setNote] = useState("");
   const [images, setImages] = useState<PreviewImage[]>([]);
-  const [textContent, setTextContent] = useState("");
-  const [inputMode, setInputMode] = useState<"photo" | "text" | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const router = useRouter();
+  const pollingIntervalsRef = useRef<Set<ReturnType<typeof setInterval>>>(new Set());
   const { toast } = useToast();
+  const { data: uploadsData, mutate: mutateUploads } = useRecentUploads(1, 5);
+  const recentUploads = uploadsData?.items || [];
+
+  // Clean up all polling intervals on unmount
+  useEffect(() => {
+    const intervals = pollingIntervalsRef.current;
+    return () => {
+      for (const id of intervals) clearInterval(id);
+    };
+  }, []);
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
     if (!files) return;
     const newImages: PreviewImage[] = Array.from(files).slice(0, 9 - images.length).map((f) => ({
       id: Math.random().toString(36).slice(2),
+      file: f,
       url: URL.createObjectURL(f),
       ocrStatus: "pending" as OcrStatus,
     }));
     setImages((prev) => [...prev, ...newImages]);
-    setInputMode("photo");
+    // Reset file input
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function removeImage(id: string) {
@@ -59,25 +71,70 @@ export default function UploadPage() {
     });
   }
 
-  async function handleUpload() {
-    if (!selectedType) { toast("请选择上传类型", "warning"); return; }
-    if (images.length === 0 && !textContent) { toast("请上传图片或输入内容", "warning"); return; }
+  function pollOcrStatus(uploadId: number, imageId: string) {
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const status = await api.get<{ upload_id: number; ocr_status: OcrStatus }>(`/student/material/${uploadId}/ocr-status`);
+        setImages((prev) => prev.map((img) =>
+          img.id === imageId ? { ...img, ocrStatus: status.ocr_status } : img
+        ));
+        if (status.ocr_status === "completed" || status.ocr_status === "failed" || attempts >= 60) {
+          clearInterval(interval);
+          pollingIntervalsRef.current.delete(interval);
+          if (status.ocr_status === "completed") toast("识别完成", "success");
+          if (status.ocr_status === "failed") toast("识别失败，可稍后重试", "error");
+          mutateUploads();
+        }
+      } catch {
+        if (attempts >= 60) {
+          clearInterval(interval);
+          pollingIntervalsRef.current.delete(interval);
+        }
+      }
+    }, 3000);
+    pollingIntervalsRef.current.add(interval);
+  }
 
-    setUploading(true);
-    // Simulate OCR processing
-    if (images.length > 0) {
-      setImages((prev) => prev.map((img) => ({ ...img, ocrStatus: "processing" as OcrStatus })));
-      await new Promise((r) => setTimeout(r, 1500));
-      setImages((prev) => prev.map((img) => ({ ...img, ocrStatus: "completed" as OcrStatus })));
+  async function uploadSingleFile(img: PreviewImage) {
+    const formData = new FormData();
+    formData.append("upload_type", selectedType);
+    if (selectedSubject) {
+      formData.append("subject_id", String(getSubjectId(selectedSubject)));
+    }
+    if (note) formData.append("note", note);
+    formData.append("file", img.file);
+
+    // Backend returns 202: { resource_id, status, poll_url, message }
+    const result = await api.post<{ resource_id: number; status: string; poll_url: string }>("/student/material/upload", formData);
+
+    setImages((prev) => prev.map((p) =>
+      p.id === img.id ? { ...p, ocrStatus: "processing" as OcrStatus, uploadId: result.resource_id } : p
+    ));
+
+    if (result.status === "pending" || result.status === "processing") {
+      pollOcrStatus(result.resource_id, img.id);
     }
 
-    await new Promise((r) => setTimeout(r, 500));
-    toast("上传成功", "success");
-    setUploading(false);
-    images.forEach((img) => URL.revokeObjectURL(img.url));
-    setImages([]);
-    setTextContent("");
-    setNote("");
+    return result;
+  }
+
+  async function handleUpload() {
+    if (!selectedType) { toast("请选择上传类型", "warning"); return; }
+    if (images.length === 0) { toast("请上传图片", "warning"); return; }
+
+    setUploading(true);
+    try {
+      // Upload each file as a separate request (backend accepts single file)
+      await Promise.all(images.map((img) => uploadSingleFile(img)));
+      toast("上传成功", "success");
+      mutateUploads();
+    } catch {
+      toast("上传失败，请重试", "error");
+    } finally {
+      setUploading(false);
+    }
   }
 
   const ocrStatusConfig: Record<OcrStatus, { label: string; class: string }> = {
@@ -97,7 +154,7 @@ export default function UploadPage() {
           <Card>
             <CardTitle>选择上传方式</CardTitle>
             <button
-              onClick={() => { setInputMode("photo"); fileInputRef.current?.click(); }}
+              onClick={() => fileInputRef.current?.click()}
               className="w-full py-10 border-2 border-dashed border-border rounded-xl hover:border-primary hover:bg-primary-light/30 transition-colors flex flex-col items-center gap-2 mb-4"
             >
               <span className="text-4xl">📷</span>
@@ -107,13 +164,8 @@ export default function UploadPage() {
             <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileSelect} />
 
             <div className="flex gap-2">
-              <button
-                onClick={() => setInputMode("text")}
-                className={cn("flex-1 py-3 border rounded-lg text-sm transition-colors",
-                  inputMode === "text" ? "border-primary bg-primary-light text-primary" : "border-border text-text-secondary hover:bg-gray-50"
-                )}
-              >
-                📝 文本输入
+              <button className="flex-1 py-3 border border-border rounded-lg text-sm text-text-tertiary cursor-not-allowed">
+                📝 文本输入（即将支持）
               </button>
               <button className="flex-1 py-3 border border-border rounded-lg text-sm text-text-tertiary cursor-not-allowed">
                 🎤 语音输入
@@ -172,22 +224,6 @@ export default function UploadPage() {
           </div>
         </div>
 
-        {/* Text Input Area */}
-        {inputMode === "text" && (
-          <Card className="mb-4">
-            <CardTitle>文本输入</CardTitle>
-            <textarea
-              value={textContent}
-              onChange={(e) => setTextContent(e.target.value)}
-              placeholder="请输入学习内容、题目或笔记..."
-              rows={6}
-              maxLength={2000}
-              className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
-            />
-            <p className="text-xs text-text-tertiary text-right mt-1">{textContent.length}/2000</p>
-          </Card>
-        )}
-
         {/* Image Preview Area */}
         {images.length > 0 && (
           <Card className="mb-4">
@@ -225,27 +261,26 @@ export default function UploadPage() {
           </Card>
         )}
 
-        {inputMode === "text" && textContent && (
-          <div className="mb-4">
-            <Button fullWidth loading={uploading} onClick={handleUpload}>确认上传</Button>
-          </div>
-        )}
-
         {/* Upload History */}
         <Card>
           <div className="flex items-center justify-between mb-3">
-            <CardTitle className="mb-0">📜 最近上传</CardTitle>
-            <button className="text-xs text-primary hover:underline">查看全部 →</button>
+            <CardTitle className="mb-0">最近上传</CardTitle>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {mockRecentUploads.map((u) => (
-              <div key={u.id} className="p-3 bg-gray-50 rounded-lg">
-                <p className="text-sm font-medium">{u.subject}{uploadTypeLabels[u.upload_type]}</p>
-                <p className="text-xs text-text-tertiary mt-1">{formatRelativeTime(u.created_at)}</p>
-                <span className="text-xs text-success mt-1 inline-block">✓ 已识别</span>
-              </div>
-            ))}
-          </div>
+          {recentUploads.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {recentUploads.map((u) => (
+                <div key={u.id} className="p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm font-medium">{getSubject(u.subject_id ?? 0).name}{uploadTypeLabels[u.upload_type]}</p>
+                  <p className="text-xs text-text-tertiary mt-1">{formatRelativeTime(u.created_at)}</p>
+                  <span className={cn("text-xs mt-1 inline-block", ocrStatusConfig[u.ocr_status]?.class || "text-text-tertiary")}>
+                    {u.ocr_status === "completed" ? "✓ " : ""}{ocrStatusConfig[u.ocr_status]?.label || u.ocr_status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-text-tertiary">暂无上传记录</p>
+          )}
         </Card>
       </main>
     </div>

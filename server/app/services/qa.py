@@ -341,6 +341,7 @@ async def chat_stream(
     intent = intent_result["intent"]
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        yield _serialize_sse_event({"type": "session_id", "data": session.id})
         if intent_result["route_to"] == "none":
             answer = "请尽量把问题聚焦到具体学科学习内容，我可以帮你拆题、找思路和定位知识点。"
             knowledge_points = await _default_knowledge_points(db, subject_id)
