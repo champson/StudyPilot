@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.model_router import get_model_router
 from app.llm.prompts import PLANNING_SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
+
+# Fallback plan template used when Planning Agent fails
+GENERIC_FALLBACK_PLAN = {
+    "recommended_subjects": [],
+    "tasks": [],
+    "generation_context": {
+        "source": "generic_fallback",
+        "reason": "planning_agent_failed",
+    },
+}
 
 
 def _subject_limit(available_minutes: int) -> int:
@@ -77,8 +90,22 @@ def rule_based_ranking(context: dict[str, Any]) -> list[dict[str, Any]]:
     return ranked
 
 
-def build_fallback_plan(context: dict[str, Any]) -> dict[str, Any]:
+def build_fallback_plan(context: dict[str, Any], *, error_reason: str | None = None) -> dict[str, Any]:
+    """Build fallback plan when LLM fails.
+    
+    Returns a rule-based plan with generation_context indicating fallback source.
+    """
     ranked = rule_based_ranking(context)
+    if not ranked:
+        # No subjects available, return generic fallback
+        logger.warning(
+            "Planning Agent fallback: no subjects available, returning generic fallback"
+        )
+        return {
+            **GENERIC_FALLBACK_PLAN,
+            "reasoning": error_reason or "LLM 不可用，无可用学科。",
+        }
+    
     selected = ranked[: _subject_limit(context.get("available_minutes", 120))]
     tasks: list[dict[str, Any]] = []
     sequence = 1
@@ -139,6 +166,10 @@ def build_fallback_plan(context: dict[str, Any]) -> dict[str, Any]:
         ],
         "tasks": tasks,
         "reasoning": reasoning or "使用规则引擎生成保底计划。",
+        "generation_context": {
+            "source": "rule_based_fallback",
+            "reason": error_reason or "planning_agent_unavailable",
+        },
     }
 
 
@@ -148,6 +179,12 @@ async def generate_plan_payload(
     db: AsyncSession | None = None,
     student_id: int | None = None,
 ) -> dict[str, Any]:
+    """Generate learning plan using LLM.
+    
+    On failure:
+    - Returns rule-based fallback plan with generation_context
+    - Does not raise exception
+    """
     router = get_model_router()
     ranked = rule_based_ranking(context)
     prompt_payload = dict(context)
@@ -178,6 +215,17 @@ async def generate_plan_payload(
             "recommended_subjects": recommended_subjects,
             "tasks": tasks,
             "reasoning": data.get("reasoning", ""),
+            "generation_context": {
+                "source": "llm_generated",
+                "reason": None,
+            },
         }
-    except Exception:
-        return build_fallback_plan(context)
+    except Exception as exc:
+        error_message = str(exc)
+        logger.warning(
+            "Planning Agent failed, using fallback. "
+            "student_id=%s, error=%s",
+            student_id,
+            error_message,
+        )
+        return build_fallback_plan(context, error_reason=error_message)

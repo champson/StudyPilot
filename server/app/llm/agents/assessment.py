@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.model_router import get_model_router
 from app.llm.prompts import ASSESSMENT_SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 def _infer_outcome(messages: list[dict[str, Any]]) -> tuple[str, str | None]:
@@ -83,7 +86,14 @@ async def assess_session(
     knowledge_points_involved: list[dict[str, Any]],
     db: AsyncSession | None = None,
     student_id: int | None = None,
-) -> dict[str, Any]:
+    skip_on_failure: bool = True,
+) -> dict[str, Any] | None:
+    """Assess QA session and evaluate knowledge point mastery.
+    
+    On failure:
+    - If skip_on_failure=True (default): Returns None, logs error, does not block main flow
+    - If skip_on_failure=False: Returns fallback assessment result
+    """
     router = get_model_router()
     payload = {
         "subject_id": subject_id,
@@ -106,7 +116,22 @@ async def assess_session(
         if not isinstance(data, dict):
             raise ValueError("assessment payload is not an object")
         return data
-    except Exception:
+    except Exception as exc:
+        error_message = str(exc)
+        logger.warning(
+            "Assessment Agent failed, %s. "
+            "student_id=%s, subject_id=%s, kp_count=%d, error=%s",
+            "skipping assessment" if skip_on_failure else "using fallback",
+            student_id,
+            subject_id,
+            len(knowledge_points_involved),
+            error_message,
+        )
+        
+        if skip_on_failure:
+            # Skip assessment, do not block main flow
+            return None
+        
         return build_fallback_assessment(
             subject_id=subject_id,
             messages=messages,

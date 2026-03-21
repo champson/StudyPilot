@@ -41,15 +41,27 @@ export default function ShareReportPage() {
     </div>
   );
 
-  if (error) return (
-    <div className="min-h-screen bg-bg flex items-center justify-center px-4">
-      <Card className="text-center max-w-sm">
-        <p className="text-4xl mb-4">⏰</p>
-        <h2 className="text-lg font-semibold mb-2">链接已过期或无效</h2>
-        <p className="text-sm text-text-secondary">此分享链接已超过有效期或无效，请联系学生获取新的分享链接</p>
-      </Card>
-    </div>
-  );
+  if (error) {
+    const status = error.status as number | undefined;
+    const isInvalid = status === 404;
+    const isExpired = status === 410 || status === 401;
+
+    return (
+      <div className="min-h-screen bg-bg flex items-center justify-center px-4">
+        <Card className="text-center max-w-sm">
+          <p className="text-4xl mb-4">{isInvalid ? "🔗" : "⏰"}</p>
+          <h2 className="text-lg font-semibold mb-2">
+            {isInvalid ? "链接无效" : "链接已过期"}
+          </h2>
+          <p className="text-sm text-text-secondary">
+            {isInvalid
+              ? "此分享链接无效，请检查链接是否正确或联系分享者"
+              : "此分享链接已超过有效期，请联系学生获取新的分享链接"}
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   if (!report) return null;
 

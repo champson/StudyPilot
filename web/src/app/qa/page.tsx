@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, useId } from "react";
 import { PageHeader } from "@/components/layout/app-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +18,13 @@ const strategyLabels: Record<string, { label: string; class: string }> = {
   full_solution: { label: "完整步骤", class: "bg-orange-50 text-orange-600" },
 };
 
+// 长列表优化：最大可见消息数
+const MAX_VISIBLE_MESSAGES = 50;
+const LOAD_MORE_THRESHOLD = 100;
+
 export default function QAPage() {
+  const inputDescId = useId();
+  const [showAllMessages, setShowAllMessages] = useState(false);
   const [messages, setMessages] = useState<QAMessage[]>([
     {
       id: 0,
@@ -40,6 +46,16 @@ export default function QAPage() {
 
   const { data: qaHistoryData } = useQAHistory(1, 20);
   const qaHistory = qaHistoryData?.items || [];
+
+  // 长列表优化：超过阈值时只渲染最近的消息
+  const visibleMessages = useMemo(() => {
+    if (messages.length <= LOAD_MORE_THRESHOLD || showAllMessages) {
+      return messages;
+    }
+    return messages.slice(-MAX_VISIBLE_MESSAGES);
+  }, [messages, showAllMessages]);
+
+  const hasHiddenMessages = messages.length > LOAD_MORE_THRESHOLD && !showAllMessages;
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -107,8 +123,11 @@ export default function QAPage() {
                 : m
               )
             );
-          } else if (event.type === "session_id" && event.data) {
-            setSessionId(event.data);
+          } else if (
+            (event.type === "session_created" || event.type === "session_id") &&
+            (event.session_id || event.data)
+          ) {
+            setSessionId(event.session_id ?? event.data);
           }
         } catch { /* ignore non-JSON lines */ }
       },
@@ -178,8 +197,25 @@ export default function QAPage() {
 
       {/* Chat Area */}
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 max-w-3xl mx-auto w-full">
-        <div className="space-y-4">
-          {messages.map((msg) => (
+        <div
+          className="space-y-4"
+          role="log"
+          aria-live="polite"
+          aria-label="聊天记录"
+        >
+          {/* 加载更多历史消息按钮 */}
+          {hasHiddenMessages && (
+            <div className="text-center py-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAllMessages(true)}
+              >
+                加载更多历史消息（{messages.length - MAX_VISIBLE_MESSAGES} 条）
+              </Button>
+            </div>
+          )}
+          {visibleMessages.map((msg) => (
             <div key={msg.id} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
               <div className={cn(
                 "max-w-[85%] md:max-w-[75%] rounded-2xl px-4 py-3",
@@ -206,7 +242,7 @@ export default function QAPage() {
                 <div className={cn(
                   "text-sm whitespace-pre-wrap leading-relaxed",
                   msg.role === "user" ? "text-white" : "text-text-primary",
-                  streaming && msg === messages[messages.length - 1] && msg.role === "assistant" && "streaming-cursor"
+                  streaming && msg === visibleMessages[visibleMessages.length - 1] && msg.role === "assistant" && "streaming-cursor"
                 )}>
                   {msg.content}
                 </div>
@@ -267,6 +303,8 @@ export default function QAPage() {
             onKeyDown={handleKeyDown}
             placeholder="输入你的问题..."
             rows={1}
+            aria-label="输入问题"
+            aria-describedby={inputDescId}
             className="flex-1 px-3 py-2.5 border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none max-h-32"
             style={{ minHeight: "42px" }}
           />
@@ -274,6 +312,7 @@ export default function QAPage() {
           <button
             onClick={sendMessage}
             disabled={!input.trim() || sending || streaming}
+            aria-disabled={!input.trim() || sending || streaming}
             className={cn(
               "p-2.5 rounded-lg transition-colors shrink-0",
               input.trim() && !sending && !streaming ? "bg-primary text-white hover:bg-primary-hover" : "bg-gray-100 text-text-tertiary"
@@ -283,7 +322,7 @@ export default function QAPage() {
             ➤
           </button>
         </div>
-        <p className="text-xs text-text-tertiary text-center mt-1.5 max-w-3xl mx-auto">Enter 发送，Shift+Enter 换行</p>
+        <p id={inputDescId} className="text-xs text-text-tertiary text-center mt-1.5 max-w-3xl mx-auto">Enter 发送，Shift+Enter 换行</p>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import math
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,8 +66,8 @@ async def chat_stream(
 
 @router.get("/history", response_model=PaginatedResponse[QaSessionListItem])
 async def list_history(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     student_id: int = Depends(get_student_id),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),

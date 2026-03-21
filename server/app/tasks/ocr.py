@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -12,6 +13,12 @@ from app.models.upload import StudyUpload
 from app.models.user import User
 from app.services.knowledge import resolve_knowledge_points_by_names
 from app.tasks.celery_app import celery
+
+logger = logging.getLogger(__name__)
+
+# OCR task retry configuration
+OCR_MAX_RETRIES = 3
+OCR_BASE_RETRY_DELAY = 60  # seconds
 
 
 async def _resolve_admin_user_id() -> int | None:
@@ -152,14 +159,41 @@ async def run_ocr_pipeline(upload_id: int, *, raise_on_error: bool = False) -> N
         await db.commit()
 
 
-@celery.task(bind=True, max_retries=2)
+@celery.task(bind=True, max_retries=OCR_MAX_RETRIES, default_retry_delay=OCR_BASE_RETRY_DELAY)
 def process_ocr(self, upload_id: int):
+    """Process OCR for an uploaded file.
+    
+    Retry configuration:
+    - max_retries: 3
+    - Exponential backoff: 60s * (2 ^ retry_count)
+    - Final failure: Mark upload as 'ocr_failed'
+    """
     try:
         asyncio.run(run_ocr_pipeline(upload_id, raise_on_error=True))
     except Exception as exc:
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=30)
+        retry_count = self.request.retries
+        
+        if retry_count < self.max_retries:
+            # Exponential backoff: 60, 120, 240 seconds
+            countdown = OCR_BASE_RETRY_DELAY * (2 ** retry_count)
+            logger.warning(
+                "OCR task failed, retrying. upload_id=%s, retry=%d/%d, "
+                "next_retry_in=%ds, error=%s",
+                upload_id,
+                retry_count + 1,
+                self.max_retries,
+                countdown,
+                str(exc),
+            )
+            raise self.retry(exc=exc, countdown=countdown)
+        
+        # Final failure after all retries exhausted
         error_message = str(exc)
+        logger.error(
+            "OCR task failed after all retries. upload_id=%s, error=%s",
+            upload_id,
+            error_message,
+        )
 
         async def _finalize_failure():
             async with async_session_factory() as db:
@@ -167,6 +201,9 @@ def process_ocr(self, upload_id: int):
                 upload = result.scalar_one_or_none()
                 if upload is None:
                     return
+                # Mark as 'ocr_failed' instead of just 'failed'
+                upload.ocr_status = "ocr_failed"
+                upload.ocr_error = error_message
                 await _mark_failed(db, upload, error_message)
                 await db.commit()
 

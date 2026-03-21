@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncGenerator
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -19,6 +19,7 @@ from app.llm.model_router import get_model_router
 from app.llm.prompts import TUTORING_SYSTEM_PROMPT
 from app.models.knowledge import KnowledgeTree
 from app.models.qa import QaMessage, QaSession
+from app.models.system import ManualCorrection
 from app.services.knowledge import apply_assessment_results, resolve_knowledge_points_by_names
 
 
@@ -341,7 +342,7 @@ async def chat_stream(
     intent = intent_result["intent"]
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        yield _serialize_sse_event({"type": "session_id", "data": session.id})
+        yield _serialize_sse_event({"type": "session_created", "session_id": session.id})
         if intent_result["route_to"] == "none":
             answer = "请尽量把问题聚焦到具体学科学习内容，我可以帮你拆题、找思路和定位知识点。"
             knowledge_points = await _default_knowledge_points(db, subject_id)
@@ -496,4 +497,275 @@ async def get_session_detail(
     session = result.scalar_one_or_none()
     if not session:
         raise AppError("SESSION_NOT_FOUND", "会话不存在", status_code=404)
+    return session
+
+
+# ---------------------------------------------------------------------------
+# 答疑质量评估与自动纠偏 - 参考 phase3-detailed-design.md §5.8
+# ---------------------------------------------------------------------------
+
+# 评估阈值配置
+QA_QUALITY_LOW_FIRST_TRY_THRESHOLD = 0.2  # 低正确率阈值
+QA_QUALITY_CONSECUTIVE_COUNT = 3  # 连续失败次数
+QA_QUALITY_HIGH_FREQUENCY_HOURS = 24  # 高频答疑时间窗口（小时）
+QA_QUALITY_HIGH_FREQUENCY_COUNT = 3  # 高频答疑次数阈值
+
+# 纠偏类型
+CORRECTION_TYPE_LOW_FIRST_TRY = "low_first_try_rate"
+CORRECTION_TYPE_HIGH_FREQUENCY = "high_frequency_qa"
+CORRECTION_TYPE_KNOWLEDGE_REGRESSION = "knowledge_regression"
+
+
+def _extract_knowledge_point_ids(session: QaSession) -> set[int]:
+    """从TQaSession的消息中提取知识点ID"""
+    kp_ids: set[int] = set()
+    if not session.messages:
+        return kp_ids
+    
+    for msg in session.messages:
+        if msg.knowledge_points:
+            for kp in msg.knowledge_points:
+                if isinstance(kp, dict) and kp.get("id"):
+                    kp_ids.add(int(kp["id"]))
+                elif isinstance(kp, int):
+                    kp_ids.add(kp)
+    return kp_ids
+
+
+async def _count_sessions_for_kp_in_hours(
+    db: AsyncSession,
+    student_id: int,
+    knowledge_point_id: int,
+    hours: int = 24,
+) -> int:
+    """
+    统计指定时间窗口内某知识点的答疑会话数量
+    """
+    cutoff_time = datetime.now(UTC) - timedelta(hours=hours)
+    
+    # 查询包含该知识点的消息所属的会话
+    # 使用 JSONB 查询匹配知识点
+    session_ids_result = await db.execute(
+        select(QaMessage.session_id)
+        .distinct()
+        .join(QaSession, QaMessage.session_id == QaSession.id)
+        .where(
+            QaSession.student_id == student_id,
+            QaSession.created_at >= cutoff_time,
+            QaMessage.knowledge_points.op('@>')(
+                f'[{{"id": {knowledge_point_id}}}]'
+            ),
+        )
+    )
+    session_ids = session_ids_result.scalars().all()
+    return len(session_ids)
+
+
+async def _get_recent_sessions_for_kp(
+    db: AsyncSession,
+    student_id: int,
+    knowledge_point_id: int,
+    count: int = 3,
+) -> list[QaSession]:
+    """
+    获取某知识点最近的 N 个答疑会话
+    """
+    # 查询包含该知识点的消息所属的会话
+    session_ids_result = await db.execute(
+        select(QaMessage.session_id)
+        .distinct()
+        .join(QaSession, QaMessage.session_id == QaSession.id)
+        .where(
+            QaSession.student_id == student_id,
+            QaMessage.knowledge_points.op('@>')(
+                f'[{{"id": {knowledge_point_id}}}]'
+            ),
+        )
+        .order_by(QaSession.created_at.desc())
+        .limit(count)
+    )
+    session_ids = session_ids_result.scalars().all()
+    
+    if not session_ids:
+        return []
+    
+    result = await db.execute(
+        select(QaSession)
+        .options(selectinload(QaSession.messages))
+        .where(QaSession.id.in_(session_ids))
+        .order_by(QaSession.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+def _calculate_first_try_rate(session: QaSession) -> float:
+    """
+    计算会话的首次尝试正确率
+    通过分析会话消息的 tutoring_strategy 判断
+    - 'direct_answer' 或无策略认为是第一次正确
+    - 'hint', 'scaffold' 等表示需要提示
+    """
+    if not session.messages:
+        return 1.0  # 无消息默认正常
+    
+    assistant_messages = [m for m in session.messages if m.role == "assistant"]
+    if not assistant_messages:
+        return 1.0
+    
+    # 简化判断: 检查第一条助手消息的策略
+    first_msg = assistant_messages[0]
+    strategy = first_msg.tutoring_strategy or "direct_answer"
+    
+    # 如果第一次就使用了 hint/scaffold 策略，说明学生需要帮助
+    if strategy in ("hint", "scaffold", "redirect"):
+        return 0.0
+    
+    return 1.0
+
+
+async def _create_qa_correction(
+    db: AsyncSession,
+    session_id: int,
+    student_id: int,
+    correction_type: str,
+    reason: str,
+    knowledge_point_id: int | None = None,
+) -> ManualCorrection:
+    """
+    创建答疑纠偏记录
+    """
+    correction = ManualCorrection(
+        target_type="qa",
+        target_id=session_id,
+        original_content={
+            "alert_type": correction_type,
+            "student_id": student_id,
+            "knowledge_point_id": knowledge_point_id,
+        },
+        corrected_content={},  # 纠偏内容待管理员填写
+        correction_reason=reason,
+        corrected_by=0,  # 系统自动创建，使用 0 标识
+        status="pending",
+    )
+    db.add(correction)
+    await db.flush()
+    return correction
+
+
+async def evaluate_session_quality(
+    db: AsyncSession,
+    session_id: int,
+    student_id: int,
+) -> list[ManualCorrection]:
+    """
+    评估答疑会话质量，根据规则触发人工纠偏
+    
+    触发条件 (参考 phase3-detailed-design.md §5.8):
+    1. 连续 3 次同知识点 first_try_correct=False
+    2. 24h 内同知识点 ≥3 次答疑会话
+    
+    返回创建的纠偏记录列表
+    """
+    corrections: list[ManualCorrection] = []
+    
+    # 获取会话详情
+    result = await db.execute(
+        select(QaSession)
+        .options(selectinload(QaSession.messages))
+        .where(QaSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        return corrections
+    
+    # 提取会话涉及的知识点
+    kp_ids = _extract_knowledge_point_ids(session)
+    
+    for kp_id in kp_ids:
+        # 条件 1: 检查连续低正确率
+        recent_sessions = await _get_recent_sessions_for_kp(
+            db, student_id, kp_id, count=QA_QUALITY_CONSECUTIVE_COUNT
+        )
+        
+        if len(recent_sessions) >= QA_QUALITY_CONSECUTIVE_COUNT:
+            # 计算平均首次尝试正确率
+            avg_rate = sum(
+                _calculate_first_try_rate(s) for s in recent_sessions
+            ) / len(recent_sessions)
+            
+            if avg_rate < QA_QUALITY_LOW_FIRST_TRY_THRESHOLD:
+                # 检查是否已存在类似的待处理纠偏
+                existing = await db.execute(
+                    select(ManualCorrection.id).where(
+                        ManualCorrection.target_type == "qa",
+                        ManualCorrection.target_id == session_id,
+                        ManualCorrection.status == "pending",
+                    )
+                )
+                if not existing.scalar_one_or_none():
+                    correction = await _create_qa_correction(
+                        db,
+                        session_id=session_id,
+                        student_id=student_id,
+                        correction_type=CORRECTION_TYPE_LOW_FIRST_TRY,
+                        reason=f"知识点 {kp_id} 连续 {QA_QUALITY_CONSECUTIVE_COUNT} 次答疑正确率过低 ({avg_rate:.0%})，建议检查 Tutoring Agent 教学策略",
+                        knowledge_point_id=kp_id,
+                    )
+                    corrections.append(correction)
+        
+        # 条件 2: 检查高频答疑
+        recent_count = await _count_sessions_for_kp_in_hours(
+            db, student_id, kp_id, hours=QA_QUALITY_HIGH_FREQUENCY_HOURS
+        )
+        
+        if recent_count >= QA_QUALITY_HIGH_FREQUENCY_COUNT:
+            # 检查是否已存在高频答疑纠偏
+            existing = await db.execute(
+                select(ManualCorrection.id).where(
+                    ManualCorrection.target_type == "qa",
+                    ManualCorrection.target_id == session_id,
+                    ManualCorrection.original_content["alert_type"].astext == CORRECTION_TYPE_HIGH_FREQUENCY,
+                    ManualCorrection.status == "pending",
+                )
+            )
+            if not existing.scalar_one_or_none():
+                correction = await _create_qa_correction(
+                    db,
+                    session_id=session_id,
+                    student_id=student_id,
+                    correction_type=CORRECTION_TYPE_HIGH_FREQUENCY,
+                    reason=f"知识点 {kp_id} {QA_QUALITY_HIGH_FREQUENCY_HOURS}h 内答疑 {recent_count} 次，建议提高该知识点计划优先级",
+                    knowledge_point_id=kp_id,
+                )
+                corrections.append(correction)
+    
+    return corrections
+
+
+async def close_session(
+    db: AsyncSession,
+    student_id: int,
+    session_id: int,
+) -> QaSession:
+    """
+    关闭答疑会话并触发质量评估
+    """
+    result = await db.execute(
+        select(QaSession).where(
+            QaSession.id == session_id,
+            QaSession.student_id == student_id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise AppError("SESSION_NOT_FOUND", "会话不存在", status_code=404)
+    
+    # 更新会话状态
+    session.status = "closed"
+    session.closed_at = datetime.now(UTC)
+    await db.flush()
+    
+    # 触发质量评估
+    await evaluate_session_quality(db, session_id, student_id)
+    
     return session

@@ -16,6 +16,102 @@ from app.models.upload import StudyUpload
 
 SYSTEM_MODE_KEY = "system:run_mode"
 
+# Valid target types for manual corrections
+VALID_TARGET_TYPES = {"ocr", "knowledge", "plan", "qa"}
+
+
+async def validate_correction_target(
+    db: AsyncSession,
+    target_type: str,
+    target_id: int,
+) -> None:
+    """
+    Validate that the target_id exists for the given target_type.
+    Raises HTTP 404 if target not found.
+    """
+    if target_type not in VALID_TARGET_TYPES:
+        raise AppError(
+            "INVALID_TARGET_TYPE",
+            f"无效的 target_type: {target_type}，有效值为: {', '.join(sorted(VALID_TARGET_TYPES))}",
+            status_code=400,
+        )
+
+    if target_type == "ocr":
+        result = await db.execute(
+            select(StudyUpload.id).where(StudyUpload.id == target_id)
+        )
+        if not result.scalar_one_or_none():
+            raise AppError(
+                "TARGET_NOT_FOUND",
+                f"target_type='ocr' 的 target_id={target_id} 不存在（study_uploads 表中无此记录）",
+                status_code=404,
+            )
+    elif target_type == "knowledge":
+        result = await db.execute(
+            select(StudentKnowledgeStatus.id).where(
+                StudentKnowledgeStatus.id == target_id
+            )
+        )
+        if not result.scalar_one_or_none():
+            raise AppError(
+                "TARGET_NOT_FOUND",
+                f"target_type='knowledge' 的 target_id={target_id} 不存在（student_knowledge_status 表中无此记录）",
+                status_code=404,
+            )
+    elif target_type == "plan":
+        result = await db.execute(
+            select(DailyPlan.id).where(
+                DailyPlan.id == target_id,
+                DailyPlan.is_deleted == False,  # noqa: E712
+            )
+        )
+        if not result.scalar_one_or_none():
+            raise AppError(
+                "TARGET_NOT_FOUND",
+                f"target_type='plan' 的 target_id={target_id} 不存在或已删除（daily_plans 表中无此记录）",
+                status_code=404,
+            )
+    elif target_type == "qa":
+        result = await db.execute(
+            select(QaSession.id).where(QaSession.id == target_id)
+        )
+        if not result.scalar_one_or_none():
+            raise AppError(
+                "TARGET_NOT_FOUND",
+                f"target_type='qa' 的 target_id={target_id} 不存在（qa_sessions 表中无此记录）",
+                status_code=404,
+            )
+
+
+async def create_manual_correction(
+    db: AsyncSession,
+    target_type: str,
+    target_id: int,
+    corrected_content: dict,
+    corrected_by: int,
+    original_content: dict | None = None,
+    correction_reason: str | None = None,
+    status: str = "pending",
+) -> ManualCorrection:
+    """
+    Create a manual correction record with validation.
+    Validates that target_id exists for the given target_type before creating.
+    """
+    await validate_correction_target(db, target_type, target_id)
+
+    correction = ManualCorrection(
+        target_type=target_type,
+        target_id=target_id,
+        original_content=original_content,
+        corrected_content=corrected_content,
+        correction_reason=correction_reason,
+        corrected_by=corrected_by,
+        status=status,
+    )
+    db.add(correction)
+    await db.flush()
+    return correction
+
 
 async def get_system_mode(r: aioredis.Redis) -> str:
     try:

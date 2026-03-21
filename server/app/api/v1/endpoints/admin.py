@@ -1,7 +1,7 @@
 import math
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_redis, require_admin
@@ -52,8 +52,8 @@ async def set_system_mode(
 
 @router.get("/corrections/pending", response_model=PaginatedResponse[CorrectionOut])
 async def get_pending_corrections(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
@@ -190,8 +190,8 @@ async def get_pending_count(
 
 @router.get("/corrections/logs", response_model=PaginatedResponse[CorrectionOut])
 async def get_correction_logs(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):

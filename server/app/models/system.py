@@ -1,7 +1,18 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -11,6 +22,11 @@ from app.models.base import Base
 
 class ModelCallLog(Base):
     __tablename__ = "model_call_logs"
+    __table_args__ = (
+        Index("idx_model_logs_created", "created_at", postgresql_using="btree"),
+        Index("idx_model_logs_agent", "agent_name", "created_at", postgresql_using="btree"),
+        Index("idx_model_logs_student", "student_id", "created_at", postgresql_using="btree"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     request_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
@@ -35,6 +51,17 @@ class ModelCallLog(Base):
 
 class ManualCorrection(Base):
     __tablename__ = "manual_corrections"
+    __table_args__ = (
+        CheckConstraint(
+            "target_type IN ('ocr', 'knowledge', 'plan', 'qa')",
+            name="chk_target_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'resolved', 'rejected')",
+            name="chk_correction_status",
+        ),
+        Index("idx_corrections_type", "target_type", "created_at", postgresql_using="btree"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_type: Mapped[str] = mapped_column(String(50), nullable=False)

@@ -8,6 +8,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    desc,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -26,6 +27,7 @@ class DailyPlan(SoftDeleteMixin, Base):
             unique=True,
             postgresql_where="is_deleted = false",
         ),
+        Index("idx_daily_plans_student_date", "student_id", desc("plan_date")),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

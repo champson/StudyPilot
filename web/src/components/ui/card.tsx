@@ -1,14 +1,17 @@
 import { cn } from "@/lib/utils";
 
-interface CardProps {
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   children: React.ReactNode;
   className?: string;
   padding?: boolean;
 }
 
-export function Card({ children, className, padding = true }: CardProps) {
+export function Card({ children, className, padding = true, ...props }: CardProps) {
   return (
-    <div className={cn("bg-card rounded-xl border border-border shadow-sm", padding && "p-5 md:p-6", className)}>
+    <div
+      className={cn("bg-card rounded-xl border border-border shadow-sm", padding && "p-5 md:p-6", className)}
+      {...props}
+    >
       {children}
     </div>
   );

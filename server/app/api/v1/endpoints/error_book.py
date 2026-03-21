@@ -1,6 +1,6 @@
 import math
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_student_id, require_student
@@ -20,8 +20,8 @@ router = APIRouter(prefix="/student/errors", tags=["error-book"])
 
 @router.get("", response_model=PaginatedResponse[ErrorBookOut])
 async def list_errors(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     subject_id: int | None = None,
     is_recalled: bool | None = None,
     student_id: int = Depends(get_student_id),

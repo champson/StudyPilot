@@ -4,6 +4,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -41,6 +42,14 @@ class StudentKnowledgeStatus(Base):
     __tablename__ = "student_knowledge_status"
     __table_args__ = (
         UniqueConstraint("student_id", "knowledge_point_id"),
+        Index("idx_student_knowledge_student", "student_id"),
+        Index("idx_student_knowledge_status", "status"),
+        Index(
+            "idx_student_knowledge_compound",
+            "student_id",
+            "status",
+            "knowledge_point_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -60,6 +69,9 @@ class StudentKnowledgeStatus(Base):
 
 class KnowledgeUpdateLog(Base):
     __tablename__ = "knowledge_update_logs"
+    __table_args__ = (
+        Index("idx_knowledge_logs_student", "student_id", "created_at", postgresql_using="btree"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     student_id: Mapped[int] = mapped_column(

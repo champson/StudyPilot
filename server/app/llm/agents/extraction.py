@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
 from pathlib import Path
 from typing import Any
@@ -11,13 +12,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.llm.model_router import get_model_router
 from app.llm.prompts import EXTRACTION_SYSTEM_PROMPT
 
+logger = logging.getLogger(__name__)
+
 
 def build_fallback_extraction(
     *,
     file_path: str,
     subject_id: int | None,
     subject_name: str | None,
+    error_message: str | None = None,
 ) -> dict[str, Any]:
+    """Build fallback extraction result when LLM fails.
+    
+    Returns empty knowledge_points list + raw OCR text as question_text.
+    """
     path = Path(file_path)
     try:
         raw_text = path.read_text(encoding="utf-8")
@@ -25,7 +33,8 @@ def build_fallback_extraction(
         raw_text = ""
 
     question_text = raw_text.strip() or "无法直接读取文本内容，请人工确认题目结构。"
-    return {
+    
+    result = {
         "detected_subject": subject_name or "未知学科",
         "detected_subject_id": subject_id,
         "questions": [
@@ -41,6 +50,15 @@ def build_fallback_extraction(
         ],
         "raw_text": question_text[:1000],
     }
+    
+    # Include error context for later analysis
+    if error_message:
+        result["extraction_error"] = {
+            "message": error_message,
+            "source": "extraction_agent_fallback",
+        }
+    
+    return result
 
 
 def _read_file_payload(file_path: str) -> tuple[bytes | None, str]:
@@ -108,6 +126,12 @@ async def extract_questions_from_upload(
     db: AsyncSession | None = None,
     student_id: int | None = None,
 ) -> dict[str, Any]:
+    """Extract questions from uploaded file using LLM.
+    
+    On failure:
+    - Returns empty knowledge_points list + raw OCR text as question_text
+    - Logs error information for later analysis
+    """
     router = get_model_router()
     try:
         content, _meta = await router.invoke(
@@ -132,9 +156,19 @@ async def extract_questions_from_upload(
         if not isinstance(data, dict):
             raise ValueError("extraction payload is not an object")
         return data
-    except Exception:
+    except Exception as exc:
+        error_message = str(exc)
+        logger.error(
+            "Extraction Agent failed, using fallback. "
+            "student_id=%s, file_path=%s, subject_id=%s, error=%s",
+            student_id,
+            file_path,
+            subject_id,
+            error_message,
+        )
         return build_fallback_extraction(
             file_path=file_path,
             subject_id=subject_id,
             subject_name=subject_name,
+            error_message=error_message,
         )

@@ -17,6 +17,10 @@ class ErrorBook(SoftDeleteMixin, Base):
             unique=True,
             postgresql_where=text("content_hash IS NOT NULL"),
         ),
+        Index("idx_error_book_student", "student_id"),
+        Index("idx_error_book_subject", "subject_id"),
+        Index("idx_error_book_recall", "is_recalled", "last_recall_at"),
+        Index("idx_error_book_student_status", "student_id", "is_recalled"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

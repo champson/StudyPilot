@@ -1,6 +1,9 @@
 import { getToken, AUTH_STORAGE_KEYS } from "./api";
 import { env } from "./env";
 
+/** Default timeout for stream requests (longer than regular requests) */
+const DEFAULT_STREAM_TIMEOUT = 60000; // 60 seconds
+
 export interface StreamOptions {
   onMessage?: (data: string) => void;
   onError?: (error: Error) => void;
@@ -8,6 +11,7 @@ export interface StreamOptions {
   method?: string;
   body?: unknown;
   headers?: Record<string, string>;
+  timeout?: number;
 }
 
 /**
@@ -15,25 +19,35 @@ export interface StreamOptions {
  * This is preferred over EventSource when we need to pass Authorization headers or use POST.
  */
 export async function streamRequest(path: string, options: StreamOptions = {}) {
+  const { timeout = DEFAULT_STREAM_TIMEOUT, ...restOptions } = options;
   const token = getToken();
   const headers: Record<string, string> = {
     Accept: "text/event-stream",
-    ...options.headers,
+    ...restOptions.headers,
   };
 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  if (options.body && !(options.body instanceof FormData)) {
+  if (restOptions.body && !(restOptions.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
 
+  // Set up AbortController for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeout);
+
   try {
     const response = await fetch(`${env.NEXT_PUBLIC_API_BASE}${path}`, {
-      method: options.method || "GET",
+      method: restOptions.method || "GET",
       headers,
-      body: options.body instanceof FormData ? options.body : (options.body ? JSON.stringify(options.body) : undefined),
+      body: restOptions.body instanceof FormData 
+        ? restOptions.body 
+        : (restOptions.body ? JSON.stringify(restOptions.body) : undefined),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -54,39 +68,73 @@ export async function streamRequest(path: string, options: StreamOptions = {}) {
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    // Clear initial timeout since connection is established
+    // Set up a new timeout for reading (reset on each chunk)
+    let readTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    const resetReadTimeout = () => {
+      if (readTimeoutId) clearTimeout(readTimeoutId);
+      readTimeoutId = setTimeout(() => {
+        reader.cancel();
+        if (options.onError) {
+          options.onError(new Error('流式请求超时'));
+        }
+      }, timeout);
+    };
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
+    clearTimeout(timeoutId); // Clear the initial connection timeout
+    resetReadTimeout(); // Start read timeout
 
-      // Keep the last incomplete line in the buffer
-      buffer = lines.pop() || "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") {
-            if (options.onDone) options.onDone();
-            return;
+        resetReadTimeout(); // Reset timeout on each chunk
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+
+        // Keep the last incomplete line in the buffer
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") {
+              if (readTimeoutId) clearTimeout(readTimeoutId);
+              if (options.onDone) options.onDone();
+              return;
+            }
+            if (options.onMessage) options.onMessage(data);
           }
-          if (options.onMessage) options.onMessage(data);
         }
       }
-    }
 
-    // Process any remaining buffer
-    if (buffer.startsWith("data: ")) {
-      const data = buffer.slice(6);
-      if (data !== "[DONE]" && options.onMessage) {
-        options.onMessage(data);
+      // Process any remaining buffer
+      if (buffer.startsWith("data: ")) {
+        const data = buffer.slice(6);
+        if (data !== "[DONE]" && options.onMessage) {
+          options.onMessage(data);
+        }
       }
-    }
 
-    if (options.onDone) options.onDone();
+      if (readTimeoutId) clearTimeout(readTimeoutId);
+      if (options.onDone) options.onDone();
+    } finally {
+      if (readTimeoutId) clearTimeout(readTimeoutId);
+    }
 
   } catch (error) {
+    clearTimeout(timeoutId);
+    
+    // Handle abort/timeout
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (options.onError) {
+        options.onError(new Error('请求超时'));
+      }
+      return;
+    }
+    
     if (options.onError) {
       options.onError(error instanceof Error ? error : new Error(String(error)));
     } else {

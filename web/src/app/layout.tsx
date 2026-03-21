@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/toast";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
+import { SWRProvider } from "@/components/providers/swr-provider";
 
 export const metadata: Metadata = {
   title: "AI 伴学教练 - 高考学习伴侣",
@@ -11,7 +13,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN">
       <body className="antialiased">
-        <ToastProvider>{children}</ToastProvider>
+        <ErrorBoundary>
+          <SWRProvider>
+            <ToastProvider>{children}</ToastProvider>
+          </SWRProvider>
+        </ErrorBoundary>
       </body>
     </html>
   );

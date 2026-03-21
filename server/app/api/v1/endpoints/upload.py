@@ -1,6 +1,6 @@
 import math
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import JSONResponse
 
@@ -39,8 +39,8 @@ async def upload_material(
 
 @router.get("/list", response_model=PaginatedResponse[UploadOut])
 async def list_materials(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     student_id: int = Depends(get_student_id),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),

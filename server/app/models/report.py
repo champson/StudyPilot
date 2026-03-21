@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,7 @@ class SubjectRiskState(Base):
     __tablename__ = "subject_risk_states"
     __table_args__ = (
         UniqueConstraint("student_id", "subject_id", "effective_week"),
+        Index("idx_risk_states_student", "student_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -30,6 +31,7 @@ class WeeklyReport(Base):
     __tablename__ = "weekly_reports"
     __table_args__ = (
         UniqueConstraint("student_id", "report_week"),
+        Index("idx_weekly_reports_student_week", "student_id", "report_week", postgresql_using="btree"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

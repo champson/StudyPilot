@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, desc, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -37,7 +37,7 @@ class StudentProfile(TimestampMixin, Base):
 class ExamRecord(Base):
     __tablename__ = "exam_records"
     __table_args__ = (
-        Index("idx_exam_student_date", "student_id", "exam_date"),
+        Index("idx_exam_records_student_date", "student_id", desc("exam_date")),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

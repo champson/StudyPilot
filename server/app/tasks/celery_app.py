@@ -15,6 +15,10 @@ celery.conf.update(
         "generate-weekly-reports": {
             "task": "app.tasks.weekly_report.generate_weekly_reports_task",
             "schedule": crontab(minute=30, hour=23, day_of_week="sun"),
-        }
+        },
+        "close-stale-sessions": {
+            "task": "app.tasks.session_cleanup.close_stale_sessions",
+            "schedule": crontab(minute="*/5"),  # Every 5 minutes
+        },
     },
 )

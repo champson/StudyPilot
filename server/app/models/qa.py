@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -9,6 +9,9 @@ from app.models.base import Base
 
 class QaSession(Base):
     __tablename__ = "qa_sessions"
+    __table_args__ = (
+        Index("idx_qa_sessions_student", "student_id", "created_at", postgresql_using="btree"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     student_id: Mapped[int] = mapped_column(
@@ -29,6 +32,9 @@ class QaSession(Base):
 
 class QaMessage(Base):
     __tablename__ = "qa_messages"
+    __table_args__ = (
+        Index("idx_qa_messages_session", "session_id", "created_at", postgresql_using="btree"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[int] = mapped_column(Integer, ForeignKey("qa_sessions.id"), nullable=False)

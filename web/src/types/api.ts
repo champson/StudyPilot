@@ -51,6 +51,8 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+export type RefreshTokenResponse = AuthResponse;
+
 // --- Student Profile ---
 export type Grade = "高一" | "高二" | "高三";
 export type Subject = "语文" | "数学" | "英语" | "物理" | "化学" | "地理" | "政治" | "生物" | "历史";
@@ -89,7 +91,7 @@ export interface ExamSchedule {
 }
 
 // --- Daily Plan (matches DailyPlanOut / PlanTaskOut) ---
-export type LearningMode = "workday_follow" | "weekend_review" | "exam_sprint";
+export type LearningMode = "workday_follow" | "weekend_review";
 export type PlanSource = "upload_corrected" | "history_inferred" | "manual_adjusted" | "generic_fallback";
 export type TaskType = "lecture" | "practice" | "error_review" | "consolidation";
 export type TaskStatus = "pending" | "entered" | "executed" | "completed";
@@ -312,6 +314,9 @@ export interface ShareReport {
 }
 
 // --- Admin ---
+// Correction status type
+export type CorrectionStatus = "pending" | "resolved" | "rejected";
+
 // Matches CorrectionOut
 export interface CorrectionItem {
   id: number;
@@ -321,7 +326,7 @@ export interface CorrectionItem {
   corrected_content: Record<string, unknown>;
   correction_reason: string | null;
   corrected_by: number;
-  status: string;
+  status: CorrectionStatus;
   created_at: string;
 }
 

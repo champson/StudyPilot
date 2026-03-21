@@ -59,6 +59,17 @@ export const entryReasonLabels: Record<string, string> = {
   wrong: "做错", not_know: "不会", repeated_wrong: "反复错",
 };
 
+export const errorTypeLabels: Record<string, string> = {
+  calc_error: "计算错误",
+  concept_unclear: "概念不清",
+  careless: "粗心",
+  unknown: "未知",
+  "计算错误": "计算错误",
+  "概念不清": "概念不清",
+  "粗心": "粗心",
+  "不会": "不会",
+};
+
 export const riskLevelLabels: Record<string, { label: string; color: string }> = {
   stable: { label: "稳定", color: "text-success" },
   low_risk: { label: "轻度风险", color: "text-warning" },

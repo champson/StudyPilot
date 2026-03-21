@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,6 +9,9 @@ from app.models.base import Base, SoftDeleteMixin
 
 class StudyUpload(SoftDeleteMixin, Base):
     __tablename__ = "study_uploads"
+    __table_args__ = (
+        Index("idx_study_uploads_ocr_status", "ocr_status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     student_id: Mapped[int] = mapped_column(
