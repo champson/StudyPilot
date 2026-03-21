@@ -413,6 +413,19 @@ content_hash = SHA256(question_text + sorted(knowledge_point_ids))
 | `manual_adjusted` | 管理员人工调整 |
 | `generic_fallback` | 连续 7 天无上传，降级为通用补漏计划 |
 
+### `daily_plans.plan_content` — JSONB Schema
+
+`plan_content` 存储 Planning Agent 的完整生成输出，其 JSON Schema 定义见 `docs/architecture_design.md` §4.2.4。
+
+主要结构：
+| 顶层字段 | 类型 | 说明 |
+|---------|------|------|
+| `recommended_subjects` | array | 推荐学科列表，含 reasons 标签（最多 7 个） |
+| `tasks` | array | 任务列表，含 task_content 详情（前端从 plan_tasks 表读取，不直接使用此字段） |
+| `generation_context` | object | 生成上下文快照（模型名称、延迟等），用于调试和追溯 |
+
+> **注意**：API 层不直接暴露 `plan_content`，前端通过 `GET /student/plan/today` 获取结构化的 `tasks` 数组（源自 `plan_tasks` 表）。`plan_content` 仅供后端内部追溯和管理端查看。
+
 ### `subject_risk_states.risk_level` — 风险等级计算
 
 周日晚 Celery Beat 任务 `aggregate_weekly_subject_risk()` 计算：
@@ -423,6 +436,35 @@ content_hash = SHA256(question_text + sorted(knowledge_point_ids))
 | `轻度风险` | 错误率 20-40% 或 成绩轻微下滑 |
 | `中度风险` | 错误率 40-60% 或 连续 2 周下滑 |
 | `高风险` | 错误率 >60% 或 `反复失误` 知识点 ≥3 个 |
+
+### `manual_corrections` — 多态外键与约束
+
+由于 `target_id` 根据 `target_type` 指向不同的表，无法使用标准 FK 约束，采用如下方案：
+
+**数据库层约束：**
+```sql
+-- 目标类型枚举约束
+ALTER TABLE manual_corrections
+ADD CONSTRAINT chk_target_type
+CHECK (target_type IN ('ocr', 'knowledge', 'plan', 'qa'));
+
+-- 添加 status 字段用于工单流转（已通过 Alembic 迁移添加）
+-- status 枚举：pending | resolved | rejected
+ALTER TABLE manual_corrections
+ADD CONSTRAINT chk_correction_status
+CHECK (status IN ('pending', 'resolved', 'rejected'));
+```
+
+**应用层校验（Service 层写入前必须验证）：**
+
+| target_type | target_id 指向 | 校验逻辑 |
+|-------------|---------------|--------|
+| `ocr` | `study_uploads.id` | 验证上传记录存在且 `ocr_status` 为 `completed` 或 `failed` |
+| `knowledge` | `student_knowledge_status.id` | 验证知识点状态记录存在 |
+| `plan` | `daily_plans.id` | 验证计划记录存在且 `is_deleted = false` |
+| `qa` | `qa_sessions.id` | 验证答疑会话记录存在 |
+
+校验失败时抛出 `SYS_INTERNAL_ERROR`，不允许创建悬空引用。
 
 ---
 
@@ -467,7 +509,56 @@ CREATE INDEX idx_study_uploads_ocr_status ON study_uploads(ocr_status);
 
 -- 人工纠偏按类型查询
 CREATE INDEX idx_corrections_type ON manual_corrections(target_type, created_at DESC);
+
+-- 错题按学生+状态查询（召回队列筛选）
+CREATE INDEX idx_error_book_student_status ON error_book(student_id, is_recalled);
+
+-- 答疑消息按会话+时间排序（会话详情查询）
+CREATE INDEX idx_qa_messages_session ON qa_messages(session_id, created_at ASC);
+
+-- 模型调用日志按学生查询（成本统计）
+CREATE INDEX idx_model_logs_student ON model_call_logs(student_id, created_at DESC);
+
+-- 知识点状态联合索引（覆盖索引优化学情快照查询）
+CREATE INDEX idx_student_knowledge_compound ON student_knowledge_status(student_id, status, knowledge_point_id);
+
+-- 周报按学生+周次查询
+CREATE INDEX idx_weekly_reports_student_week ON weekly_reports(student_id, report_week DESC);
+
+-- 考试记录按学生+日期查询（趋势分析）
+CREATE INDEX idx_exam_records_student_date ON exam_records(student_id, exam_date DESC);
 ```
+
+---
+
+## 视图定义
+
+### 高风险知识点视图
+
+供周报生成和 Planning Agent 使用，自动聚合“反复失误”状态的知识点：
+
+```sql
+CREATE VIEW v_high_risk_knowledge_points AS
+SELECT
+    sks.student_id,
+    sks.knowledge_point_id,
+    kt.name AS knowledge_point_name,
+    s.name AS subject_name,
+    s.id AS subject_id,
+    sks.status,
+    kt.importance_score,
+    sks.last_updated_at
+FROM student_knowledge_status sks
+JOIN knowledge_tree kt ON sks.knowledge_point_id = kt.id
+JOIN subjects s ON kt.subject_id = s.id
+WHERE sks.status = '反复失误'
+ORDER BY kt.importance_score DESC, sks.last_updated_at DESC;
+```
+
+**使用场景：**
+- 周报生成任务 `aggregate_weekly_subject_risk()` 查询各学生的高风险知识点
+- Planning Agent 生成计划时获取需优先复习的知识点
+- 学生端周报 `high_risk_knowledge_points` 字段填充
 
 ---
 

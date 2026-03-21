@@ -64,7 +64,7 @@
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                Agent 编排层 (LangGraph)                          │
+│   Agent 编排层（当前：Python 函数调用 + Celery；未来可迁移至 LangGraph）│
 │   Routing Agent → Planning Agent → Tutoring Agent               │
 │                         ↓                                        │
 │               Assessment Agent ← Extraction Agent                │
@@ -426,6 +426,8 @@ def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
 
 ## 4. Multi-Agent 编排设计（LangGraph）
 
+> **实现说明**：当前 MVP 阶段采用 Python 函数直接调用 + Celery 异步任务实现 Agent 编排，未引入 LangGraph。本节描述的 LangGraph 工作流为未来优化的目标架构设计。
+
 ### 4.1 Agent 职责定义
 
 | Agent | 输入 | 输出 | 职责边界 |
@@ -605,6 +607,81 @@ async def generate_plan_with_fallback(
     return plan
 ```
 
+#### 4.2.4 plan_content JSONB 结构定义
+
+Planning Agent 生成的完整计划内容存储于 `daily_plans.plan_content` 字段，后端内部存储，不通过 API 直接暴露（API 使用 `plan_tasks` 表返回 `tasks[]`）。
+
+**JSON Schema 定义：**
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PlanContent",
+  "description": "Planning Agent 生成的完整计划内容，存储于 daily_plans.plan_content",
+  "type": "object",
+  "required": ["recommended_subjects", "tasks", "generation_context"],
+  "properties": {
+    "recommended_subjects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["subject_id", "subject_name", "reasons"],
+        "properties": {
+          "subject_id": { "type": "integer" },
+          "subject_name": { "type": "string" },
+          "reasons": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["今日校内同步","今日错误较多","明日任务/测验","近期反复错误","本周覆盖不足","本周错题修复","薄弱知识点待修复","考试临近","最近成绩下滑"] },
+            "maxItems": 7
+          }
+        }
+      },
+      "minItems": 1,
+      "maxItems": 3
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["subject_id", "task_type", "task_content", "sequence", "estimated_minutes"],
+        "properties": {
+          "subject_id": { "type": "integer" },
+          "task_type": { "type": "string", "enum": ["lecture","practice","error_review","consolidation"] },
+          "task_content": {
+            "type": "object",
+            "required": ["description"],
+            "properties": {
+              "description": { "type": "string" },
+              "knowledge_point_ids": { "type": "array", "items": { "type": "integer" } },
+              "error_ids": { "type": "array", "items": { "type": "integer" } },
+              "source_material_id": { "type": "integer" }
+            }
+          },
+          "sequence": { "type": "integer", "minimum": 1 },
+          "estimated_minutes": { "type": "integer", "minimum": 5, "maximum": 120 }
+        }
+      }
+    },
+    "generation_context": {
+      "type": "object",
+      "description": "计划生成时的上下文快照，用于追溯和调试",
+      "properties": {
+        "learning_mode": { "type": "string", "enum": ["workday_follow", "weekend_review"] },
+        "available_minutes": { "type": "integer" },
+        "source": { "type": "string", "enum": ["upload_corrected","history_inferred","manual_adjusted","generic_fallback"] },
+        "model_used": { "type": "string" },
+        "generation_latency_ms": { "type": "integer" }
+      }
+    }
+  }
+}
+```
+
+**字段说明：**
+- `recommended_subjects`：推荐学科列表（1-3 门），每门学科附带推荐原因
+- `tasks`：任务列表，包含学科、任务类型、内容描述、顺序和预估时长
+- `generation_context`：计划生成时的上下文快照，便于追溯和问题排查
+
 ### 4.3 实时答疑流
 
 #### 4.3.1 答疑流转设计
@@ -661,7 +738,7 @@ from typing import TypedDict, Literal
 
 class TutoringState(TypedDict):
     student_id: int
-    session_id: str
+    session_id: int | None
     messages: list[dict]
     current_question: dict | None
     intent: str | None
@@ -758,6 +835,76 @@ async def chat_stream(
             "Connection": "keep-alive",
         }
     )
+```
+
+#### 4.3.4 流式答疑会话状态管理
+
+**`session_id=null` 会话管理规则：**
+
+当 `POST /student/qa/chat/stream` 请求中 `session_id=null` 时，按以下逻辑处理：
+
+1. **检查是否有可复用的 active 会话**：
+   - 查询该学生当前 `status='active'` 的会话
+   - 若存在 active 会话且最后消息时间 **< 30 分钟** → 复用该会话
+   - 若存在 active 会话但已超时（≥ 30 分钟）→ 关闭旧会话，创建新会话
+   - 若不存在 active 会话 → 创建新会话
+
+2. **新建会话时创建 QaSession 记录**：
+   - `student_id` = 当前用户
+   - `session_date` = 当前日期
+   - `subject_id` = 请求中的 `subject_id`（可空）
+   - `status` = `'active'`
+
+3. **返回的 SSE 流第一个事件包含 `session_id`**（无论复用或新建）：
+   ```json
+   {"type": "session_created", "session_id": 12345}
+   ```
+
+4. **后续同一会话的追问需携带该 `session_id`**
+
+**会话自动关闭规则：**
+
+| 触发条件 | 处理方式 |
+|---------|----------|
+| 超过 30 分钟无新消息 | 异步关闭（Celery 定时任务扫描） |
+| 用户显式关闭 | 前端退出答疑页时触发 `POST /student/qa/sessions/{id}/close` |
+| 新建会话时存在旧会话 | 同一学生同时只允许 1 个 active 会话，新建会话自动关闭旧会话 |
+
+**Celery 会话超时检测任务：**
+
+```python
+# app/tasks/session_cleanup.py
+
+from celery import shared_task
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+@shared_task
+def close_stale_sessions():
+    """
+    每 5 分钟执行，关闭超过 30 分钟无活动的答疑会话。
+    """
+    import asyncio
+    asyncio.run(_async_close_stale_sessions())
+
+async def _async_close_stale_sessions():
+    threshold = datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(minutes=30)
+    
+    # 查找所有 active 且最后消息时间超过阈值的会话
+    stale_sessions = await get_stale_active_sessions(threshold)
+    
+    for session in stale_sessions:
+        await close_session(session.id, reason="timeout")
+        # 触发 Assessment Agent 对该会话进行评估
+        await trigger_session_assessment(session.id)
+```
+
+**会话状态转换：**
+
+```
+active → closed（正常关闭）
+active → closed（超时关闭）
+active → closed（被新会话替代）
 ```
 
 ### 4.4 学情状态更新流
@@ -1490,6 +1637,132 @@ CREATE TABLE weekly_reports (
 CREATE INDEX idx_weekly_reports_student ON weekly_reports(student_id, report_week DESC);
 ```
 
+**周报数据模型详细定义：**
+
+**`weekly_reports.student_view_content` JSON Schema：**
+
+```json
+{
+  "report_week": "2026-W12",
+  "usage_days": 5,
+  "total_minutes": 430,
+  "task_completion_rate": 0.82,
+  "subject_trends": [
+    {
+      "subject_name": "数学",
+      "risk_level": "轻度风险",
+      "trend": "improving",
+      "error_count_this_week": 8,
+      "recall_success_rate": 0.75,
+      "knowledge_mastered_delta": 3
+    }
+  ],
+  "high_risk_knowledge_points": [
+    {
+      "name": "函数的定义域",
+      "subject_name": "数学",
+      "status": "反复失误",
+      "importance_score": 0.80,
+      "error_count": 3
+    }
+  ],
+  "repeated_error_points": [
+    { "name": "二次函数求极值", "error_count": 4 }
+  ],
+  "next_stage_suggestions": ["建议加强函数定义域复习", "物理力学专项训练"],
+  "class_rank": 12,
+  "grade_rank": 45
+}
+```
+
+**计算逻辑说明：**
+
+| 字段 | 计算方式 | 数据来源 |
+|------|---------|----------|
+| `task_completion_rate` | 本周 completed 任务数 / 本周总任务数 | `plan_tasks` 表 |
+| `trend` | 对比本周与上周的 `risk_level`，升级为 improving，不变为 stable，降级为 declining | `subject_risk_states` 表 |
+| `high_risk_knowledge_points` | 状态为“反复失误”的知识点 | `v_high_risk_knowledge_points` 视图 |
+| `repeated_error_points` | `recall_count >= 2` 且 `last_recall_result = 'fail'` 的错题 | `error_book` 表 |
+| `knowledge_mastered_delta` | 本周新达到“基本掌握”状态的知识点数 | `knowledge_update_logs` 表 |
+| `recall_success_rate` | 本周错题召回成功次数 / 本周错题召回总次数 | `error_book` 表 |
+
+**`weekly_reports.parent_view_content` 字段说明：**
+
+与学生视角基本相同，但排除以下字段：
+
+| 排除字段 | 原因 |
+|---------|------|
+| `high_risk_knowledge_points` | 仅展示学科级风险，不暴露知识点细节 |
+
+**分享链接脱敏规则：**
+
+`share_summary` 字段在 `student_view_content` 基础上额外剔除：
+- `class_rank` / `grade_rank`（排名信息不对外分享）
+- `high_risk_knowledge_points`（学情细节不对外分享）
+
+**周报生成服务示例：**
+
+```python
+# app/services/report.py
+
+async def generate_weekly_report(
+    student_id: int,
+    report_week: str,  # "2026-W12"
+    db: AsyncSession
+) -> WeeklyReport:
+    """
+    生成周报，分别构建学生/家长视角内容。
+    """
+    # 查询高风险知识点
+    high_risk_points = await get_high_risk_knowledge_points(student_id, db)
+    
+    # 查询反复错题
+    repeated_errors = await db.execute(
+        select(ErrorBook)
+        .where(
+            ErrorBook.student_id == student_id,
+            ErrorBook.recall_count >= 2,
+            ErrorBook.last_recall_result == "fail"
+        )
+    )
+    
+    # 计算任务完成率
+    week_start, week_end = get_week_date_range(report_week)
+    task_stats = await calculate_task_completion(student_id, week_start, week_end, db)
+    
+    # 构建学生视角内容
+    student_view = {
+        "report_week": report_week,
+        "usage_days": task_stats["usage_days"],
+        "total_minutes": task_stats["total_minutes"],
+        "task_completion_rate": task_stats["completion_rate"],
+        "subject_trends": await build_subject_trends(student_id, report_week, db),
+        "high_risk_knowledge_points": high_risk_points,
+        "repeated_error_points": [format_error(e) for e in repeated_errors],
+        "next_stage_suggestions": generate_suggestions(high_risk_points),
+        "class_rank": await get_latest_rank(student_id, "class", db),
+        "grade_rank": await get_latest_rank(student_id, "grade", db),
+    }
+    
+    # 构建家长视角内容（排除知识点细节）
+    parent_view = {k: v for k, v in student_view.items() 
+                   if k != "high_risk_knowledge_points"}
+    
+    # 构建分享摘要（进一步排除排名信息）
+    share_summary = {k: v for k, v in parent_view.items() 
+                    if k not in ("class_rank", "grade_rank")}
+    
+    return WeeklyReport(
+        student_id=student_id,
+        report_week=report_week,
+        usage_days=student_view["usage_days"],
+        total_minutes=student_view["total_minutes"],
+        student_view_content=student_view,
+        parent_view_content=parent_view,
+        share_summary=share_summary,
+    )
+```
+
 #### 6.1.7 模型调用日志
 
 ```sql
@@ -1529,11 +1802,83 @@ CREATE TABLE manual_corrections (
     original_content JSONB,
     corrected_content JSONB NOT NULL,
     correction_reason TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending/resolved/rejected
     corrected_by INTEGER NOT NULL REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_corrections_type ON manual_corrections(target_type, created_at DESC);
+```
+
+**人工纠偏多态设计补充说明：**
+
+由于 `target_id` 是跨表引用（`target_type` 决定其所属表），多态外键无法通过标准 FK 约束实现，采用“CHECK 约束 + 应用层校验”双重保障。
+
+```sql
+-- manual_corrections 目标类型约束
+ALTER TABLE manual_corrections
+ADD CONSTRAINT chk_target_type
+CHECK (target_type IN ('ocr', 'knowledge', 'plan', 'qa'));
+
+ALTER TABLE manual_corrections
+ADD CONSTRAINT chk_correction_status
+CHECK (status IN ('pending', 'resolved', 'rejected'));
+
+-- 应用层校验逻辑（数据库层无法跨表 FK）
+-- target_type = 'ocr'        → target_id 引用 study_uploads.id
+-- target_type = 'knowledge'  → target_id 引用 student_knowledge_status.id
+-- target_type = 'plan'       → target_id 引用 daily_plans.id
+-- target_type = 'qa'         → target_id 引用 qa_sessions.id
+```
+
+**Service 层写入校验规范：**
+
+```python
+# app/services/admin.py
+
+TARGET_TYPE_TABLE_MAP = {
+    "ocr": "study_uploads",
+    "knowledge": "student_knowledge_status",
+    "plan": "daily_plans",
+    "qa": "qa_sessions",
+}
+
+async def create_manual_correction(
+    target_type: str,
+    target_id: int,
+    corrected_content: dict,
+    corrected_by: int,
+    db: AsyncSession
+) -> ManualCorrection:
+    """
+    创建人工纠偏记录，写入前必须验证 target_id 存在于对应表。
+    """
+    # 校验 target_type 有效性
+    if target_type not in TARGET_TYPE_TABLE_MAP:
+        raise BusinessException(
+            code="VALIDATION_ERROR",
+            message=f"Invalid target_type: {target_type}"
+        )
+    
+    # 校验 target_id 存在于对应表
+    table_name = TARGET_TYPE_TABLE_MAP[target_type]
+    exists = await check_record_exists(table_name, target_id, db)
+    if not exists:
+        raise BusinessException(
+            code="SYS_INTERNAL_ERROR",
+            message=f"Target record not found: {table_name}.id={target_id}"
+        )
+    
+    # 创建纠偏记录
+    correction = ManualCorrection(
+        target_type=target_type,
+        target_id=target_id,
+        corrected_content=corrected_content,
+        corrected_by=corrected_by,
+    )
+    db.add(correction)
+    await db.commit()
+    return correction
 ```
 
 ### 6.2 知识树设计
@@ -1558,6 +1903,70 @@ INSERT INTO knowledge_tree (subject_id, parent_id, name, code, level, syllabus_l
 (1, 7, '函数的概念', 'math-function-concept', 2, '掌握', 6, 0.85),
 (1, 8, '函数的定义域', 'math-function-concept-domain', 3, '掌握', 5, 0.80),
 (1, 8, '函数的值域', 'math-function-concept-range', 3, '掌握', 4, 0.72);
+```
+
+### 6.3 查询优化与视图
+
+#### 6.3.1 高风险知识点视图
+
+周报生成任务 `aggregate_weekly_subject_risk()` 和 Planning Agent 需要查询“高风险知识点”（状态为“反复失误”的知识点）。为提高查询效率和代码可读性，创建如下视图：
+
+```sql
+-- 高风险知识点视图：周报生成时使用
+CREATE VIEW v_high_risk_knowledge_points AS
+SELECT
+    sks.student_id,
+    sks.knowledge_point_id,
+    kt.name AS knowledge_point_name,
+    s.name AS subject_name,
+    s.id AS subject_id,
+    sks.status,
+    kt.importance_score,
+    sks.last_updated_at
+FROM student_knowledge_status sks
+JOIN knowledge_tree kt ON sks.knowledge_point_id = kt.id
+JOIN subjects s ON kt.subject_id = s.id
+WHERE sks.status = '反复失误'
+ORDER BY kt.importance_score DESC, sks.last_updated_at DESC;
+```
+
+**使用说明：**
+- 此视图供周报生成任务 `aggregate_weekly_subject_risk()` 和 Planning Agent 使用
+- `反复失误` 状态的知识点自动归入“高风险”，无需额外维护标记字段
+- 配合 `student_knowledge_status(student_id, status)` 索引，查询性能可接受（MVP 数据量 ~10000 条）
+
+**建议添加的索引：**
+
+```sql
+-- 优化高风险知识点查询性能
+CREATE INDEX idx_student_knowledge_status_student_status 
+    ON student_knowledge_status(student_id, status);
+```
+
+**查询示例：**
+
+```python
+# app/services/report.py
+
+async def get_high_risk_knowledge_points(
+    student_id: int,
+    db: AsyncSession
+) -> list[dict]:
+    """
+    获取学生的高风险知识点列表，用于周报生成。
+    """
+    result = await db.execute(
+        text("""
+            SELECT knowledge_point_id, knowledge_point_name, subject_name, 
+                   subject_id, importance_score, last_updated_at
+            FROM v_high_risk_knowledge_points
+            WHERE student_id = :student_id
+            ORDER BY importance_score DESC
+            LIMIT 10
+        """),
+        {"student_id": student_id}
+    )
+    return [dict(row._mapping) for row in result]
 ```
 
 ---
