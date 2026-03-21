@@ -57,7 +57,7 @@ def build_fallback_tutoring_response(
     strategy: str = "hint",
 ) -> str:
     knowledge_points = knowledge_points or []
-    kp_text = knowledge_points or [{"id": 0, "name": "解题思路"}]
+    kp_text = knowledge_points or [{"name": "解题思路"}]
     answer = (
         "先别急着直接求答案，我们先把题目条件拆开。"
         "你先说说题目已知了什么、要求你求什么，我再带你走下一步。"

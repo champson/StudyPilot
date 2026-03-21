@@ -1,7 +1,5 @@
-import asyncio
 from collections.abc import AsyncGenerator
 
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -22,22 +20,20 @@ from app.models.user import User
 TEST_DB_URL = settings.DATABASE_URL
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+async def reset_test_schema(conn) -> None:
+    await conn.exec_driver_sql("DROP SCHEMA IF EXISTS public CASCADE")
+    await conn.exec_driver_sql("CREATE SCHEMA public")
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def engine():
     eng = create_async_engine(TEST_DB_URL, echo=False)
     async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+        await reset_test_schema(conn)
         await conn.run_sync(Base.metadata.create_all)
     yield eng
     async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+        await reset_test_schema(conn)
     await eng.dispose()
 
 
@@ -57,41 +53,34 @@ async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
             return True
 
     fake_redis = FakeRedis()
+    async with engine.begin() as conn:
+        await reset_test_schema(conn)
+        await conn.run_sync(Base.metadata.create_all)
+
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with session_factory() as session:
-        # Use a nested transaction (SAVEPOINT) so that rollback undoes everything
-        # including commits made by the application code via get_db override.
-        async with session.begin():
-            nested = await session.begin_nested()
+        async def override_get_db():
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
 
-            # Override get_db to reuse this session and re-open savepoints after commits
-            async def override_get_db():
-                nonlocal nested
-                try:
-                    yield session
-                    # Application code calls commit() via get_db; absorb it as a
-                    # nested savepoint commit so the outer txn stays open.
-                    if nested.is_active:
-                        await nested.commit()
-                    nested = await session.begin_nested()
-                except Exception:
-                    if nested.is_active:
-                        await nested.rollback()
-                    nested = await session.begin_nested()
-                    raise
+        async def override_get_redis():
+            yield fake_redis
 
-            async def override_get_redis():
-                yield fake_redis
-
-            app.dependency_overrides[get_db] = override_get_db
-            app.dependency_overrides[get_redis] = override_get_redis
-            set_redis_client_for_testing(fake_redis)
-            reset_model_router()
-            yield session
-            # Rollback the outer transaction — undoes ALL data written during the test
-            await session.rollback()
+        app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_redis] = override_get_redis
+        set_redis_client_for_testing(fake_redis)
+        reset_model_router()
+        yield session
+        await session.rollback()
         app.dependency_overrides.clear()
         set_redis_client_for_testing(None)
+    async with engine.begin() as conn:
+        await reset_test_schema(conn)
+        await conn.run_sync(Base.metadata.create_all)
 
 
 @pytest_asyncio.fixture
@@ -217,6 +206,7 @@ async def seed_data(db_session: AsyncSession) -> dict:
         "student_id": profile.id,
     }
     parent_token = create_access_token(parent_jwt)
+    await db_session.commit()
 
     return {
         "admin": admin,

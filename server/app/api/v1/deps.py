@@ -13,7 +13,7 @@ from app.core.exceptions import AppError
 from app.core.redis import get_redis_client
 from app.models.user import User
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 async def get_redis() -> AsyncGenerator[aioredis.Redis, None]:
@@ -21,9 +21,11 @@ async def get_redis() -> AsyncGenerator[aioredis.Redis, None]:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
+    if credentials is None:
+        raise AppError("AUTH_NOT_AUTHENTICATED", "未提供认证信息", status_code=403)
     token = credentials.credentials
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])

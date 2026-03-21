@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import bcrypt
 import jwt
@@ -11,6 +12,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     expire = datetime.now(UTC) + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
+    to_encode.setdefault("jti", str(uuid4()))
     to_encode.update({"iat": datetime.now(UTC), "exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 

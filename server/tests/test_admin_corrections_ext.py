@@ -15,6 +15,7 @@ async def test_correction_detail_ocr(
         student_id=seed_data["profile"].id,
         original_url="/uploads/test.jpg",
         upload_type="homework",
+        file_hash="test-upload-hash",
         ocr_status="failed",
         ocr_result={"text": "original ocr"},
         ocr_error="recognition failed",

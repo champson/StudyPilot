@@ -30,7 +30,9 @@ class ErrorBook(SoftDeleteMixin, Base):
     subject_id: Mapped[int] = mapped_column(Integer, ForeignKey("subjects.id"), nullable=False)
     question_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     question_image_url: Mapped[str | None] = mapped_column(String(500))
-    knowledge_points: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="'[]'")
+    knowledge_points: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     error_type: Mapped[str | None] = mapped_column(String(50))
     entry_reason: Mapped[str] = mapped_column(String(50), nullable=False)
     content_hash: Mapped[str | None] = mapped_column(String(64))

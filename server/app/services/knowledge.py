@@ -388,10 +388,13 @@ async def apply_assessment_results(
         knowledge_point_id = update.get("knowledge_point_id")
         if knowledge_point_id is None:
             continue
+        knowledge_point_id = int(knowledge_point_id)
+        if knowledge_point_id <= 0:
+            continue
         await update_mastery_state(
             db,
             student_id=student_id,
-            knowledge_point_id=int(knowledge_point_id),
+            knowledge_point_id=knowledge_point_id,
             outcome=_assessment_outcome(update, summary),
             session_id=session.id,
             reason=update.get("reason", "assessment"),

@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,7 +17,12 @@ class QaSession(Base):
     student_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("student_profiles.id"), nullable=False
     )
-    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    session_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        default=date.today,
+        server_default=func.current_date(),
+    )
     task_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("plan_tasks.id"))
     subject_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("subjects.id"))
     status: Mapped[str] = mapped_column(String(20), default="active")
@@ -40,10 +45,10 @@ class QaMessage(Base):
     session_id: Mapped[int] = mapped_column(Integer, ForeignKey("qa_sessions.id"), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    attachments: Mapped[dict | None] = mapped_column(JSONB, server_default="'[]'")
+    attachments: Mapped[dict | None] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     intent: Mapped[str | None] = mapped_column(String(50))
     related_question_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("error_book.id"))
-    knowledge_points: Mapped[dict | None] = mapped_column(JSONB, server_default="'[]'")
+    knowledge_points: Mapped[dict | None] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     tutoring_strategy: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

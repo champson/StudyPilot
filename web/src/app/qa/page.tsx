@@ -128,6 +128,10 @@ export default function QAPage() {
             (event.session_id || event.data)
           ) {
             setSessionId(event.session_id ?? event.data);
+          } else if (event.type === "session_created" && event.session_id) {
+            setSessionId(event.session_id);
+          } else if (event.type === "session_id" && event.data) {
+            setSessionId(event.data);
           }
         } catch { /* ignore non-JSON lines */ }
       },

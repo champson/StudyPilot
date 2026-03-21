@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,9 +9,7 @@ from app.models.base import Base, SoftDeleteMixin
 
 class StudyUpload(SoftDeleteMixin, Base):
     __tablename__ = "study_uploads"
-    __table_args__ = (
-        Index("idx_study_uploads_ocr_status", "ocr_status"),
-    )
+    __table_args__ = (Index("idx_study_uploads_ocr_status", "ocr_status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     student_id: Mapped[int] = mapped_column(
@@ -22,9 +20,11 @@ class StudyUpload(SoftDeleteMixin, Base):
     original_url: Mapped[str] = mapped_column(String(500), nullable=False)
     thumbnail_url: Mapped[str | None] = mapped_column(String(500))
     ocr_result: Mapped[dict | None] = mapped_column(JSONB)
-    extracted_questions: Mapped[dict | None] = mapped_column(JSONB, server_default="'[]'")
+    extracted_questions: Mapped[dict | None] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb")
+    )
     subject_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("subjects.id"))
-    knowledge_points: Mapped[dict | None] = mapped_column(JSONB, server_default="'[]'")
+    knowledge_points: Mapped[dict | None] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     ocr_status: Mapped[str] = mapped_column(String(20), default="pending")
     ocr_error: Mapped[str | None] = mapped_column(Text)
     is_manual_corrected: Mapped[bool] = mapped_column(Boolean, default=False)

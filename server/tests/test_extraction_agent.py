@@ -71,8 +71,10 @@ async def test_run_ocr_pipeline_updates_upload(
     )
     db_session.add(upload)
     await db_session.flush()
+    await db_session.commit()
 
     await run_ocr_pipeline(upload.id)
+    await db_session.refresh(upload)
 
     result = await db_session.execute(select(StudyUpload).where(StudyUpload.id == upload.id))
     refreshed = result.scalar_one()

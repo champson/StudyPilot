@@ -17,7 +17,12 @@ class User(TimestampMixin, Base):
     password_hash: Mapped[str | None] = mapped_column(String(200))
     invite_token: Mapped[str | None] = mapped_column(String(100), unique=True)
     linked_student_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("student_profiles.id")
+        Integer,
+        ForeignKey(
+            "student_profiles.id",
+            name="fk_users_linked_student_id",
+            use_alter=True,
+        ),
     )
 
     student_profile: Mapped["StudentProfile | None"] = relationship(

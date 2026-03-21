@@ -40,10 +40,14 @@ async def test_chat_stream(client: AsyncClient, seed_data: dict):
     assert len(lines) >= 4
     # Last line is [DONE]
     assert lines[-1] == "data: [DONE]"
-    # Check a chunk event
+    # First event announces the created/reused session
     first_event = json.loads(lines[0].removeprefix("data: "))
-    assert first_event["type"] == "chunk"
-    assert "content" in first_event
+    assert first_event["type"] == "session_created"
+    assert isinstance(first_event["session_id"], int)
+    # Check a chunk event
+    first_chunk = json.loads(lines[1].removeprefix("data: "))
+    assert first_chunk["type"] == "chunk"
+    assert "content" in first_chunk
     # Check knowledge_points event
     kp_line = [line for line in lines if "knowledge_points" in line]
     assert len(kp_line) == 1

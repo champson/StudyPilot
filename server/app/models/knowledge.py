@@ -11,6 +11,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -28,7 +29,9 @@ class KnowledgeTree(Base):
     code: Mapped[str | None] = mapped_column(String(100))
     level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     description: Mapped[str | None] = mapped_column(Text)
-    textbook_versions: Mapped[dict | None] = mapped_column(JSONB, server_default="'[]'")
+    textbook_versions: Mapped[dict | None] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb")
+    )
     importance_score: Mapped[float | None] = mapped_column(Numeric(5, 4), default=0.5)
     exam_frequency: Mapped[int | None] = mapped_column(Integer, default=0)
     last_exam_year: Mapped[int | None] = mapped_column(Integer)

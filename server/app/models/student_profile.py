@@ -2,7 +2,19 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, desc, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    desc,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,17 +26,22 @@ class StudentProfile(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id"), unique=True, nullable=False
+        Integer,
+        ForeignKey("users.id", name="fk_student_profiles_user_id"),
+        unique=True,
+        nullable=False,
     )
     grade: Mapped[str] = mapped_column(String(20), nullable=False)
     textbook_version: Mapped[str | None] = mapped_column(String(50))
     class_rank: Mapped[int | None] = mapped_column(Integer)
     grade_rank: Mapped[int | None] = mapped_column(Integer)
-    subject_combination: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="'[]'")
-    upcoming_exams: Mapped[dict | None] = mapped_column(JSONB, server_default="'[]'")
-    current_progress: Mapped[dict | None] = mapped_column(JSONB, server_default="'{}'")
+    subject_combination: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    upcoming_exams: Mapped[dict | None] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    current_progress: Mapped[dict | None] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    onboarding_data: Mapped[dict | None] = mapped_column(JSONB, server_default="'{}'")
+    onboarding_data: Mapped[dict | None] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
 
     user: Mapped["User"] = relationship(
         "User",
@@ -36,9 +53,7 @@ class StudentProfile(TimestampMixin, Base):
 
 class ExamRecord(Base):
     __tablename__ = "exam_records"
-    __table_args__ = (
-        Index("idx_exam_records_student_date", "student_id", desc("exam_date")),
-    )
+    __table_args__ = (Index("idx_exam_records_student_date", "student_id", desc("exam_date")),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     student_id: Mapped[int] = mapped_column(

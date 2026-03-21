@@ -91,7 +91,11 @@ async def _normalize_knowledge_points(
     unresolved_names: list[str] = []
     for point in raw_points:
         if isinstance(point, dict) and point.get("id") is not None:
-            normalized.append({"id": int(point["id"]), "name": point.get("name")})
+            point_id = int(point["id"])
+            if point_id > 0:
+                normalized.append({"id": point_id, "name": point.get("name")})
+            elif point.get("name"):
+                unresolved_names.append(str(point["name"]))
         elif isinstance(point, dict) and point.get("name"):
             unresolved_names.append(str(point["name"]))
         elif isinstance(point, str):
