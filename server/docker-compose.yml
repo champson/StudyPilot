@@ -63,6 +63,21 @@ services:
       redis:
         condition: service_healthy
 
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app:celery beat -l info
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://studypilot:studypilot@db:5432/studypilot
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
