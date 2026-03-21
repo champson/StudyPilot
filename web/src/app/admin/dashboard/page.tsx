@@ -1,21 +1,34 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CardSkeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import { useAdminMetrics, usePendingCorrections, useSystemMode } from "@/lib/hooks";
+import {
+  useAdminMetrics,
+  usePendingCorrections,
+  useSystemMode,
+  useCostTrend,
+  useFallbackStats,
+  useModelCalls,
+  usePendingCountByType,
+} from "@/lib/hooks";
 import { api } from "@/lib/api";
-import type { CorrectionItem } from "@/types/api";
+import type { CorrectionItem, ModelCallsData } from "@/types/api";
 
 export default function AdminDashboardPage() {
   const { toast } = useToast();
   const { data: metrics, isLoading } = useAdminMetrics();
   const { data: correctionsData } = usePendingCorrections(1);
   const { data: modeData, mutate: mutateMode } = useSystemMode();
+  const { data: modelCalls } = useModelCalls() as { data: ModelCallsData | undefined };
+  const { data: cost } = useCostTrend("today");
+  const { data: fallback } = useFallbackStats("today");
+  const { data: pendingCount } = usePendingCountByType();
   const [switching, setSwitching] = useState(false);
 
   const corrections: CorrectionItem[] = correctionsData?.items || [];
@@ -59,25 +72,70 @@ export default function AdminDashboardPage() {
               ))}
             </div>
 
+            {/* Model call summary cards */}
+            <div className="grid grid-cols-3 gap-3">
+              <Card className="text-center">
+                <p className="text-2xl font-bold text-text-primary">{modelCalls?.total ?? 0}</p>
+                <p className="text-xs text-text-tertiary">调用次数</p>
+              </Card>
+              <Card className="text-center">
+                <p className="text-2xl font-bold text-text-primary">¥{cost?.total_cost?.toFixed(2) ?? "0.00"}</p>
+                <p className="text-xs text-text-tertiary">今日成本</p>
+              </Card>
+              <Card className="text-center">
+                <p className={cn("text-2xl font-bold", (fallback?.fallback_rate ?? 0) > 0.05 ? "text-error" : "text-success")}>
+                  {((fallback?.fallback_rate ?? 0) * 100).toFixed(1)}%
+                </p>
+                <p className="text-xs text-text-tertiary">降级率</p>
+              </Card>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Pending corrections by type */}
               <Card>
-                <CardTitle>待处理纠偏</CardTitle>
-                <div className="space-y-2">
-                  {corrections.slice(0, 5).map((c) => (
-                    <div key={c.id} className="p-2.5 bg-gray-50 rounded-lg">
-                      <div className="flex items-center justify-between mb-1">
-                        <Badge variant={c.target_type === "ocr" ? "warning" : c.target_type === "knowledge" ? "error" : "default"}>
-                          {c.target_type.toUpperCase()}
-                        </Badge>
-                        <span className="text-xs text-text-tertiary">{c.correction_reason}</span>
-                      </div>
-                      <p className="text-xs text-text-secondary line-clamp-2">目标 #{c.target_id}</p>
-                    </div>
-                  ))}
-                  {corrections.length === 0 && (
-                    <p className="text-sm text-text-tertiary text-center py-4">暂无待处理纠偏</p>
-                  )}
-                </div>
+                <CardTitle>待处理事项</CardTitle>
+                {pendingCount && pendingCount.total > 0 ? (
+                  <div className="space-y-2">
+                    {pendingCount.ocr > 0 && (
+                      <Link href="/admin/corrections" className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-error" />
+                          <span className="text-sm">OCR 识别失败</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{pendingCount.ocr} 条</span>
+                          <span className="text-xs text-text-tertiary">→</span>
+                        </div>
+                      </Link>
+                    )}
+                    {pendingCount.plan > 0 && (
+                      <Link href="/admin/corrections" className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-warning" />
+                          <span className="text-sm">计划异常</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{pendingCount.plan} 条</span>
+                          <span className="text-xs text-text-tertiary">→</span>
+                        </div>
+                      </Link>
+                    )}
+                    {pendingCount.knowledge > 0 && (
+                      <Link href="/admin/corrections" className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-warning" />
+                          <span className="text-sm">知识点标注待修正</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">{pendingCount.knowledge} 条</span>
+                          <span className="text-xs text-text-tertiary">→</span>
+                        </div>
+                      </Link>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-text-tertiary text-center py-4">暂无待处理事项</p>
+                )}
               </Card>
 
               <Card>
@@ -105,6 +163,26 @@ export default function AdminDashboardPage() {
                 </div>
               </Card>
             </div>
+
+            {/* Recent pending corrections */}
+            {corrections.length > 0 && (
+              <Card>
+                <CardTitle>最近待处理纠偏</CardTitle>
+                <div className="space-y-2">
+                  {corrections.slice(0, 5).map((c) => (
+                    <div key={c.id} className="p-2.5 bg-gray-50 rounded-lg">
+                      <div className="flex items-center justify-between mb-1">
+                        <Badge variant={c.target_type === "ocr" ? "warning" : c.target_type === "knowledge" ? "error" : "default"}>
+                          {c.target_type.toUpperCase()}
+                        </Badge>
+                        <span className="text-xs text-text-tertiary">{c.correction_reason}</span>
+                      </div>
+                      <p className="text-xs text-text-secondary line-clamp-2">目标 #{c.target_id}</p>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
           </>
         ) : (
           <p className="text-text-tertiary">无法加载数据</p>

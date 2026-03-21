@@ -33,6 +33,7 @@ class OcrCorrectionRequest(BaseModel):
 
 class ResolveCorrectionRequest(BaseModel):
     corrected_content: dict | None = None
+    reason: str | None = None
 
 
 class KnowledgeCorrectionRequest(BaseModel):
@@ -59,3 +60,59 @@ class ModelCallsOut(BaseModel):
     total: int
     by_agent: list[dict]
     by_provider: list[dict]
+
+
+# --- Phase 5: Metrics ---
+
+
+class CostTrendOut(BaseModel):
+    period: str
+    total_cost: float
+    daily_avg_cost: float
+    by_model: list[dict]
+    trend: list[dict]
+
+
+class FallbackStatsOut(BaseModel):
+    period: str
+    total_calls: int
+    fallback_count: int
+    fallback_rate: float
+    by_reason: list[dict]
+    trend: list[dict]
+
+
+class ErrorStatsOut(BaseModel):
+    period: str
+    total_errors: int
+    by_type: list[dict]
+    by_agent: list[dict]
+    trend: list[dict]
+
+
+class LatencyStatsOut(BaseModel):
+    period: str
+    avg_latency_ms: int
+    p95_latency_ms: int
+    p99_latency_ms: int
+    by_agent: list[dict]
+
+
+# --- Phase 5: Corrections ---
+
+
+class CorrectionDetailOut(CorrectionOut):
+    context: dict | None = None
+
+
+class PendingCountByTypeOut(BaseModel):
+    ocr: int = 0
+    knowledge: int = 0
+    plan: int = 0
+    total: int = 0
+
+
+class PlanCorrectionRequest(BaseModel):
+    plan_id: int
+    corrected_tasks: list[dict]
+    reason: str | None = None

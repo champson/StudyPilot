@@ -36,6 +36,10 @@ class WeeklyReportOut(BaseModel):
     grade_rank: int | None = None
     share_token: str | None = None
     created_at: datetime
+    # Phase 5: previous week comparison
+    previous_usage_days: int | None = None
+    previous_total_minutes: int | None = None
+    previous_task_completion_rate: float | None = None
 
     model_config = {"from_attributes": True}
 

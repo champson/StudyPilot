@@ -42,6 +42,30 @@ def _risk_trend(risk_level: str) -> str:
     return "improving"
 
 
+def _generate_parent_suggestions(
+    usage_days: int,
+    completion_rate: float,
+    subject_trends: list[dict[str, Any]],
+) -> list[str]:
+    suggestions: list[str] = []
+    if usage_days >= 5:
+        suggestions.append("孩子本周学习投入积极，建议给予肯定和鼓励。")
+    elif usage_days >= 3:
+        suggestions.append("孩子本周学习频率适中，可适当提醒保持节奏。")
+    else:
+        suggestions.append("孩子本周使用频率较低，建议了解原因并鼓励坚持。")
+
+    declining = [s for s in subject_trends if s.get("trend") == "declining"]
+    if declining:
+        suggestions.append(
+            f"{declining[0]['subject_name']}近期表现有下滑趋势，"
+            "如有需要可考虑针对性辅导。"
+        )
+
+    suggestions.append("周末可适当提醒孩子进行错题回顾。")
+    return suggestions[:3]
+
+
 def _suggestions_from_report(
     subject_trends: list[dict[str, Any]],
     high_risk_points: list[dict[str, Any]],
@@ -163,6 +187,9 @@ async def build_weekly_report_payload(
         "class_rank": profile.class_rank,
         "grade_rank": profile.grade_rank,
     }
+    parent_support_suggestions = _generate_parent_suggestions(
+        usage_days, task_completion_rate, subject_trends
+    )
     parent_view_content = {
         "student_name": None,
         "task_completion_rate": task_completion_rate,
@@ -184,6 +211,18 @@ async def build_weekly_report_payload(
         ],
         "trend_description": suggestions[0] if suggestions else None,
         "action_suggestions": suggestions,
+        "avg_daily_minutes": round(total_minutes / max(usage_days, 1)),
+        "risk_summary": {
+            "high_risk_points": [
+                {"name": p["name"], "subject_name": p["subject_name"]}
+                for p in high_risk_points[:3]
+            ],
+            "repeated_errors": [
+                {"name": e["name"], "error_count": e["error_count"]}
+                for e in repeated_error_points[:3]
+            ],
+        },
+        "parent_support_suggestions": parent_support_suggestions,
     }
     share_summary = {
         "trend_overview": suggestions[0] if suggestions else "本周整体节奏稳定。",
@@ -247,6 +286,28 @@ async def generate_weekly_reports(
     for student_id in student_ids:
         reports.append(await upsert_weekly_report(db, student_id, report_week))
     return reports
+
+
+async def get_previous_week_report(
+    db: AsyncSession, student_id: int, current_week: str
+) -> WeeklyReport | None:
+    year_str, week_str = current_week.split("-W")
+    year, week_num = int(year_str), int(week_str)
+    if week_num == 1:
+        # Dec 28 always belongs to the last ISO week of its year
+        last_week_date = date(year - 1, 12, 28)
+        iso = last_week_date.isocalendar()
+        prev_week = f"{iso[0]}-W{iso[1]:02d}"
+    else:
+        prev_week = f"{year}-W{week_num - 1:02d}"
+
+    result = await db.execute(
+        select(WeeklyReport).where(
+            WeeklyReport.student_id == student_id,
+            WeeklyReport.report_week == prev_week,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_weekly_report(

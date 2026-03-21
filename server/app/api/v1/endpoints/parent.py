@@ -9,6 +9,7 @@ from app.schemas.parent import (
     ExamRecordRequest,
     ParentWeeklyReportOut,
     RiskOverviewOut,
+    RiskSummary,
     SupplementRequest,
     TrendOut,
 )
@@ -29,6 +30,13 @@ async def get_weekly_report(
 ):
     report = await svc.get_parent_weekly_report(db, student_id, week)
     content = report.parent_view_content or {}
+
+    prev = await report_svc.get_previous_week_report(db, student_id, report.report_week)
+    prev_content = (prev.parent_view_content or {}) if prev else {}
+
+    risk_summary_raw = content.get("risk_summary")
+    risk_summary = RiskSummary(**risk_summary_raw) if risk_summary_raw else None
+
     return SuccessResponse(
         data=ParentWeeklyReportOut(
             report_week=report.report_week,
@@ -43,6 +51,12 @@ async def get_weekly_report(
             grade_rank=content.get("grade_rank"),
             share_token=report.share_token,
             created_at=report.created_at,
+            avg_daily_minutes=content.get("avg_daily_minutes"),
+            risk_summary=risk_summary,
+            parent_support_suggestions=content.get("parent_support_suggestions", []),
+            previous_usage_days=prev.usage_days if prev else None,
+            previous_total_minutes=prev.total_minutes if prev else None,
+            previous_task_completion_rate=prev_content.get("task_completion_rate"),
         )
     )
 

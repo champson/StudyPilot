@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { PageHeader } from "@/components/layout/app-header";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,10 +11,24 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { riskLevelLabels, trendLabels, formatMinutes } from "@/lib/utils";
 import { useWeeklyReport } from "@/lib/hooks";
 import { api } from "@/lib/api";
+import { WeekSelector, useRecentWeeks } from "@/components/report/week-selector";
+
+function ComparisonTag({ current, previous, unit, invert }: { current: number; previous?: number | null; unit: string; invert?: boolean }) {
+  if (previous == null) return null;
+  const diff = current - previous;
+  if (diff === 0) return <span className="text-xs text-text-tertiary">→ 与上周持平</span>;
+  const isPositive = invert ? diff < 0 : diff > 0;
+  const arrow = diff > 0 ? "↑" : "↓";
+  const color = isPositive ? "text-success" : "text-error";
+  const absVal = Math.abs(diff);
+  return <span className={`text-xs ${color}`}>{arrow} 比上周{diff > 0 ? "+" : ""}{unit === "%" ? `${Math.round(absVal * 100)}%` : `${absVal}${unit}`}</span>;
+}
 
 export default function WeeklyReportPage() {
+  const weeks = useRecentWeeks();
+  const [selectedWeek, setSelectedWeek] = useState(() => weeks[0]?.value);
   const { toast } = useToast();
-  const { data: report, isLoading } = useWeeklyReport();
+  const { data: report, isLoading } = useWeeklyReport(selectedWeek);
 
   async function handleShare() {
     if (!report) return;
@@ -39,26 +54,29 @@ export default function WeeklyReportPage() {
         backHref="/dashboard"
         rightContent={
           <div className="flex items-center gap-2">
-            <span className="text-sm text-text-secondary">{report.report_week}</span>
+            <WeekSelector value={selectedWeek} onChange={setSelectedWeek} />
             <Button variant="outline" size="sm" onClick={handleShare}>分享</Button>
           </div>
         }
       />
 
       <main className="max-w-4xl mx-auto px-4 md:px-6 py-4 md:py-6">
-        {/* Core Metrics */}
+        {/* Core Metrics with comparison */}
         <div className="grid grid-cols-3 gap-3 md:gap-4 mb-6">
           <Card className="text-center">
             <p className="text-xs text-text-tertiary mb-1">学习天数</p>
             <p className="text-2xl font-bold text-text-primary">{report.usage_days} / 7 <span className="text-sm font-normal">天</span></p>
+            <ComparisonTag current={report.usage_days ?? 0} previous={report.previous_usage_days} unit="天" />
           </Card>
           <Card className="text-center">
             <p className="text-xs text-text-tertiary mb-1">总时长</p>
             <p className="text-2xl font-bold text-text-primary">{formatMinutes(report.total_minutes ?? 0)}</p>
+            <ComparisonTag current={report.total_minutes ?? 0} previous={report.previous_total_minutes} unit="min" />
           </Card>
           <Card className="text-center">
             <p className="text-xs text-text-tertiary mb-1">完成率</p>
             <p className="text-2xl font-bold text-text-primary">{Math.round((report.task_completion_rate ?? 0) * 100)}%</p>
+            <ComparisonTag current={report.task_completion_rate ?? 0} previous={report.previous_task_completion_rate} unit="%" />
           </Card>
         </div>
 

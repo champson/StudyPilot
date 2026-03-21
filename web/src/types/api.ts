@@ -253,6 +253,10 @@ export interface WeeklyReport {
   grade_rank?: number;
   share_token?: string;
   created_at: string;
+  // Phase 5: previous week comparison
+  previous_usage_days?: number;
+  previous_total_minutes?: number;
+  previous_task_completion_rate?: number;
 }
 
 // --- Parent Report (matches ParentWeeklyReportOut) ---
@@ -261,6 +265,11 @@ export interface ParentSubjectRisk {
   subject_name: string;
   risk_level: string;
   effective_week: string;
+}
+
+export interface RiskSummary {
+  high_risk_points: Array<{ name: string; subject_name: string }>;
+  repeated_errors: Array<{ name: string; error_count: number }>;
 }
 
 export interface ParentWeeklyReport {
@@ -276,6 +285,13 @@ export interface ParentWeeklyReport {
   grade_rank?: number;
   share_token?: string;
   created_at: string;
+  // Phase 5 enhancements
+  avg_daily_minutes?: number;
+  risk_summary?: RiskSummary;
+  parent_support_suggestions?: string[];
+  previous_usage_days?: number;
+  previous_total_minutes?: number;
+  previous_task_completion_rate?: number;
 }
 
 // --- Share (matches ShareContentOut) ---
@@ -329,4 +345,50 @@ export interface ModelCallsData {
   total: number;
   by_agent: Array<{ agent?: string; count?: number; [key: string]: unknown }>;
   by_provider: Array<{ provider?: string; count?: number; [key: string]: unknown }>;
+}
+
+// Phase 5: Admin metrics
+export interface CostTrendData {
+  period: string;
+  total_cost: number;
+  daily_avg_cost: number;
+  by_model: Array<{ model: string; cost: number }>;
+  trend: Array<{ date: string; cost: number }>;
+}
+
+export interface FallbackStatsData {
+  period: string;
+  total_calls: number;
+  fallback_count: number;
+  fallback_rate: number;
+  by_reason: Array<{ reason: string; count: number }>;
+  trend: Array<{ date: string; fallback_rate: number }>;
+}
+
+export interface ErrorStatsData {
+  period: string;
+  total_errors: number;
+  by_type: Array<{ type: string; count: number }>;
+  by_agent: Array<{ agent: string; error_count: number }>;
+  trend: Array<{ date: string; error_count: number }>;
+}
+
+export interface LatencyStatsData {
+  period: string;
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  p99_latency_ms: number;
+  by_agent: Array<{ agent: string; avg_ms: number; p95_ms: number }>;
+}
+
+// Phase 5: Correction enhancements
+export interface CorrectionDetail extends CorrectionItem {
+  context: Record<string, unknown> | null;
+}
+
+export interface PendingCountByType {
+  ocr: number;
+  knowledge: number;
+  plan: number;
+  total: number;
 }

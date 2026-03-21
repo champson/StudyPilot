@@ -45,7 +45,9 @@ class DailyPlan(SoftDeleteMixin, Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    tasks: Mapped[list["PlanTask"]] = relationship(back_populates="plan")
+    tasks: Mapped[list["PlanTask"]] = relationship(
+        back_populates="plan", order_by="PlanTask.sequence"
+    )
 
 
 class PlanTask(Base):

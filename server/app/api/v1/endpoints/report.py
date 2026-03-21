@@ -19,8 +19,12 @@ async def get_weekly_report(
     _user: User = Depends(require_student),
 ):
     report = await svc.get_weekly_report(db, student_id, week)
-    # Unpack structured fields from student_view_content JSONB
     content = report.student_view_content or {}
+
+    # Fetch previous week for comparison
+    prev = await svc.get_previous_week_report(db, student_id, report.report_week)
+    prev_content = (prev.student_view_content or {}) if prev else {}
+
     return SuccessResponse(
         data=WeeklyReportOut(
             id=report.id,
@@ -37,6 +41,9 @@ async def get_weekly_report(
             grade_rank=content.get("grade_rank"),
             share_token=report.share_token,
             created_at=report.created_at,
+            previous_usage_days=prev.usage_days if prev else None,
+            previous_total_minutes=prev.total_minutes if prev else None,
+            previous_task_completion_rate=prev_content.get("task_completion_rate"),
         )
     )
 

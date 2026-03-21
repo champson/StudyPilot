@@ -10,6 +10,12 @@ import type {
   ParentWeeklyReport,
   SystemMetrics,
   CorrectionItem,
+  CostTrendData,
+  FallbackStatsData,
+  ErrorStatsData,
+  LatencyStatsData,
+  CorrectionDetail,
+  PendingCountByType,
 } from "@/types/api";
 
 const fetcher = <T>(path: string) => api.get<T>(path);
@@ -74,8 +80,11 @@ export function useKnowledgeStatus() {
   return useSWR("/student/knowledge/status", fetcher);
 }
 
-export function useWeeklyReport() {
-  return useSWR<WeeklyReport>("/student/report/weekly", fetcher);
+export function useWeeklyReport(week?: string) {
+  const path = week
+    ? `/student/report/weekly?week=${week}`
+    : "/student/report/weekly";
+  return useSWR<WeeklyReport>(path, fetcher);
 }
 
 export function useWeeklyReportSummary() {
@@ -84,8 +93,11 @@ export function useWeeklyReportSummary() {
 
 // === Parent ===
 
-export function useParentWeeklyReport() {
-  return useSWR<ParentWeeklyReport>("/parent/report/weekly", fetcher);
+export function useParentWeeklyReport(week?: string) {
+  const path = week
+    ? `/parent/report/weekly?week=${week}`
+    : "/parent/report/weekly";
+  return useSWR<ParentWeeklyReport>(path, fetcher);
 }
 
 export function useParentRisk() {
@@ -119,4 +131,55 @@ export function usePendingCorrections(page = 1) {
 
 export function useSystemMode() {
   return useSWR<{ mode: string }>("/admin/system/mode", fetcher);
+}
+
+// Phase 5: Admin metrics hooks
+
+export function useCostTrend(period = "today") {
+  return useSWR<CostTrendData>(
+    `/admin/metrics/costs?period=${period}`,
+    fetcher
+  );
+}
+
+export function useFallbackStats(period = "today") {
+  return useSWR<FallbackStatsData>(
+    `/admin/metrics/fallbacks?period=${period}`,
+    fetcher
+  );
+}
+
+export function useErrorStats(period = "today") {
+  return useSWR<ErrorStatsData>(
+    `/admin/metrics/errors?period=${period}`,
+    fetcher
+  );
+}
+
+export function useLatencyStats(period = "today") {
+  return useSWR<LatencyStatsData>(
+    `/admin/metrics/latency?period=${period}`,
+    fetcher
+  );
+}
+
+export function useCorrectionDetail(id: number | null) {
+  return useSWR<CorrectionDetail>(
+    id ? `/admin/corrections/${id}` : null,
+    fetcher
+  );
+}
+
+export function useCorrectionLogs(page = 1, pageSize = 20) {
+  return useSWR<{ items: CorrectionItem[]; total: number }>(
+    `/admin/corrections/logs?page=${page}&page_size=${pageSize}`,
+    fetcher
+  );
+}
+
+export function usePendingCountByType() {
+  return useSWR<PendingCountByType>(
+    "/admin/corrections/pending/count",
+    fetcher
+  );
 }

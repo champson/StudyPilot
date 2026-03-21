@@ -8,12 +8,19 @@ from app.api.v1.deps import get_redis, require_admin
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.admin import (
+    CorrectionDetailOut,
     CorrectionOut,
+    CostTrendOut,
+    ErrorStatsOut,
+    FallbackStatsOut,
     HealthOut,
     KnowledgeCorrectionRequest,
+    LatencyStatsOut,
     MetricsTodayOut,
     ModelCallsOut,
     OcrCorrectionRequest,
+    PendingCountByTypeOut,
+    PlanCorrectionRequest,
     ResolveCorrectionRequest,
     SystemModeOut,
     SystemModeUpdate,
@@ -94,7 +101,8 @@ async def resolve_correction(
     db: AsyncSession = Depends(get_db),
 ):
     corrected_content = body.corrected_content if body else None
-    correction = await svc.resolve_correction(db, user.id, correction_id, corrected_content)
+    reason = body.reason if body else None
+    correction = await svc.resolve_correction(db, user.id, correction_id, corrected_content, reason)
     return SuccessResponse(data=CorrectionOut.model_validate(correction))
 
 
@@ -123,3 +131,99 @@ async def get_model_calls(
 ):
     data = await svc.get_model_calls(db)
     return SuccessResponse(data=ModelCallsOut(**data))
+
+
+# --- Phase 5: Metrics endpoints ---
+
+
+@router.get("/metrics/costs", response_model=SuccessResponse[CostTrendOut])
+async def get_cost_trend(
+    period: str = "today",
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+):
+    data = await svc.get_cost_trend(db, period)
+    return SuccessResponse(data=CostTrendOut(**data))
+
+
+@router.get("/metrics/fallbacks", response_model=SuccessResponse[FallbackStatsOut])
+async def get_fallback_stats(
+    period: str = "today",
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+):
+    data = await svc.get_fallback_stats(db, period)
+    return SuccessResponse(data=FallbackStatsOut(**data))
+
+
+@router.get("/metrics/errors", response_model=SuccessResponse[ErrorStatsOut])
+async def get_error_stats(
+    period: str = "today",
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+):
+    data = await svc.get_error_stats(db, period)
+    return SuccessResponse(data=ErrorStatsOut(**data))
+
+
+@router.get("/metrics/latency", response_model=SuccessResponse[LatencyStatsOut])
+async def get_latency_stats(
+    period: str = "today",
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+):
+    data = await svc.get_latency_stats(db, period)
+    return SuccessResponse(data=LatencyStatsOut(**data))
+
+
+# --- Phase 5: Correction endpoints ---
+
+
+@router.get("/corrections/pending/count", response_model=SuccessResponse[PendingCountByTypeOut])
+async def get_pending_count(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+):
+    data = await svc.get_pending_count_by_type(db)
+    return SuccessResponse(data=PendingCountByTypeOut(**data))
+
+
+@router.get("/corrections/logs", response_model=PaginatedResponse[CorrectionOut])
+async def get_correction_logs(
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+):
+    items, total = await svc.get_correction_logs(db, page, page_size)
+    return PaginatedResponse(
+        data=PaginatedData(
+            items=[CorrectionOut.model_validate(i) for i in items],
+            page=page,
+            page_size=page_size,
+            total=total,
+            total_pages=math.ceil(total / page_size) if total else 0,
+        )
+    )
+
+
+@router.post("/corrections/plan", response_model=SuccessResponse[CorrectionOut])
+async def correct_plan(
+    body: PlanCorrectionRequest,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    correction = await svc.correct_plan(
+        db, user.id, body.plan_id, body.corrected_tasks, body.reason
+    )
+    return SuccessResponse(data=CorrectionOut.model_validate(correction))
+
+
+@router.get("/corrections/{correction_id}", response_model=SuccessResponse[CorrectionDetailOut])
+async def get_correction_detail(
+    correction_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+):
+    data = await svc.get_correction_detail(db, correction_id)
+    return SuccessResponse(data=CorrectionDetailOut(**data))

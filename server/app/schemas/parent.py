@@ -10,6 +10,21 @@ class SubjectRisk(BaseModel):
     effective_week: str
 
 
+class RiskPoint(BaseModel):
+    name: str
+    subject_name: str
+
+
+class RepeatedError(BaseModel):
+    name: str
+    error_count: int
+
+
+class RiskSummary(BaseModel):
+    high_risk_points: list[RiskPoint] = []
+    repeated_errors: list[RepeatedError] = []
+
+
 class ParentWeeklyReportOut(BaseModel):
     report_week: str
     student_name: str | None = None
@@ -23,6 +38,13 @@ class ParentWeeklyReportOut(BaseModel):
     grade_rank: int | None = None
     share_token: str | None = None
     created_at: datetime
+    # Phase 5 enhancements
+    avg_daily_minutes: int | None = None
+    risk_summary: RiskSummary | None = None
+    parent_support_suggestions: list[str] = []
+    previous_usage_days: int | None = None
+    previous_total_minutes: int | None = None
+    previous_task_completion_rate: float | None = None
 
     model_config = {"from_attributes": True}
 
