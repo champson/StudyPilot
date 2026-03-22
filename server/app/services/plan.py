@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +20,12 @@ TASK_STATUS_ORDER = {"pending": 0, "entered": 1, "executed": 2, "completed": 3}
 TASK_NEXT_STEP = {"pending": "entered", "entered": "executed", "executed": "completed"}
 WEEKDAY_MODE = "workday_follow"
 WEEKEND_MODE = "weekend_review"
+TASK_TYPE_ALIASES = {"review": "consolidation"}
+
+
+def normalize_task_type(task_type: str | None) -> str:
+    raw = task_type or "consolidation"
+    return TASK_TYPE_ALIASES.get(raw, raw)
 
 
 def validate_transition(current: str, target: str) -> bool:
@@ -234,10 +241,16 @@ async def _enrich_plan(plan: DailyPlan, db: AsyncSession) -> DailyPlan:
             for subject_id in recommended_subjects["subject_ids"]
         ]
     elif isinstance(recommended_subjects, list):
-        for item in recommended_subjects:
-            if isinstance(item, dict) and item.get("subject_id") is not None:
-                item.setdefault("subject_name", subject_map.get(item["subject_id"]))
-                item.setdefault("reasons", [])
+        recommended_subjects = [
+            {
+                **item,
+                "subject_name": item.get("subject_name") or subject_map.get(item["subject_id"]),
+                "reasons": item.get("reasons", []),
+            }
+            if isinstance(item, dict) and item.get("subject_id") is not None
+            else item
+            for item in recommended_subjects
+        ]
 
     setattr(plan, "recommended_subjects", recommended_subjects or [])
     setattr(
@@ -248,6 +261,7 @@ async def _enrich_plan(plan: DailyPlan, db: AsyncSession) -> DailyPlan:
         else None,
     )
     for task in plan.tasks:
+        setattr(task, "task_type", normalize_task_type(task.task_type))
         setattr(task, "subject_name", subject_map.get(task.subject_id))
     return plan
 
@@ -270,11 +284,13 @@ async def generate_plan(
     existing_plan = existing.scalar_one_or_none()
     if existing_plan and not force_regenerate:
         raise AppError("PLAN_EXISTS", "今日计划已存在", status_code=409)
-    if existing_plan and force_regenerate:
-        existing_plan.is_deleted = True
 
     context = await collect_planning_context(db, student_id, available_minutes, learning_mode)
     plan_payload = await generate_plan_payload(context, db=db, student_id=student_id)
+
+    # Mark old plan deleted only after LLM call succeeds, ensuring atomicity
+    if existing_plan and force_regenerate:
+        existing_plan.is_deleted = True
     source, is_history_inferred = _plan_source(context)
 
     plan = DailyPlan(
@@ -290,7 +306,11 @@ async def generate_plan(
         status="generated",
     )
     db.add(plan)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise AppError("PLAN_EXISTS", "今日计划已存在", status_code=409)
 
     subject_ids = {
         item["subject_id"]
@@ -302,8 +322,12 @@ async def generate_plan(
     for task_data in plan_payload.get("tasks", []):
         task = PlanTask(
             plan_id=plan.id,
-            subject_id=int(task_data.get("subject_id") or default_subject_id or 1),
-            task_type=task_data.get("task_type", "review"),
+            subject_id=int(
+                task_data.get("subject_id")
+                or default_subject_id
+                or context["subjects"][0]["subject_id"]
+            ),
+            task_type=normalize_task_type(task_data.get("task_type")),
             task_content={
                 "title": task_data.get("title"),
                 "description": task_data.get("description"),
@@ -361,7 +385,12 @@ async def update_task_status(
     if not task:
         raise AppError("TASK_NOT_FOUND", "任务不存在", status_code=404)
 
-    plan_result = await db.execute(select(DailyPlan).where(DailyPlan.id == task.plan_id))
+    plan_result = await db.execute(
+        select(DailyPlan).where(
+            DailyPlan.id == task.plan_id,
+            DailyPlan.is_deleted == False,  # noqa: E712
+        )
+    )
     plan = plan_result.scalar_one_or_none()
     if not plan or plan.student_id != student_id:
         raise AppError("TASK_NOT_FOUND", "任务不存在", status_code=404)

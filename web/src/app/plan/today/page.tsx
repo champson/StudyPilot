@@ -145,7 +145,7 @@ export default function TodayPlanPage() {
                   )}
 
                   {task.status === "completed" ? (
-                    <p className="text-xs text-text-tertiary">完成时间：{new Date(task.completed_at!).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} · 用时 {task.duration_minutes} 分钟</p>
+                    <p className="text-xs text-text-tertiary">完成时间：{task.completed_at ? new Date(task.completed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "—"} · 用时 {task.duration_minutes ?? "—"} 分钟</p>
                   ) : task.status === "pending" ? (
                     <p className="text-xs text-text-tertiary">预计用时：{task.estimated_minutes} 分钟</p>
                   ) : (

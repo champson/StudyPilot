@@ -32,6 +32,8 @@ export const ERROR_CODES = {
   UPLOAD_NOT_FOUND: 'UPLOAD_NOT_FOUND',
   // Error Book
   ERROR_BOOK_ITEM_NOT_FOUND: 'ERROR_BOOK_ITEM_NOT_FOUND',
+  // Report
+  REPORT_NOT_FOUND: 'REPORT_NOT_FOUND',
   // System
   REQUEST_TIMEOUT: 'REQUEST_TIMEOUT',
   NETWORK_ERROR: 'NETWORK_ERROR',
@@ -140,15 +142,14 @@ function updateStoredToken(newToken: string): void {
  */
 async function tryRefreshToken(): Promise<string | null> {
   // If already refreshing, wait for the existing promise
-  if (isRefreshing && refreshPromise) {
+  if (refreshPromise) {
     return refreshPromise;
   }
-  
+
   const token = getToken();
   if (!token) return null;
-  
-  isRefreshing = true;
-  
+
+  // Assign promise synchronously before any await to prevent race condition
   refreshPromise = (async () => {
     try {
       const res = await fetch(`${API_BASE}/auth/refresh`, {
@@ -187,6 +188,7 @@ async function tryRefreshToken(): Promise<string | null> {
 function clearAuthAndRedirect() {
   if (typeof window === "undefined") return;
   for (const key of AUTH_STORAGE_KEYS) localStorage.removeItem(key);
+  document.cookie = "access_token=; path=/; max-age=0";
   window.location.href = "/login";
 }
 

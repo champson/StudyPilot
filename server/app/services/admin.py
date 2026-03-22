@@ -55,7 +55,8 @@ async def validate_correction_target(
         if not result.scalar_one_or_none():
             raise AppError(
                 "TARGET_NOT_FOUND",
-                f"target_type='knowledge' 的 target_id={target_id} 不存在（student_knowledge_status 表中无此记录）",
+                "target_type='knowledge' 的 "
+                f"target_id={target_id} 不存在（student_knowledge_status 表中无此记录）",
                 status_code=404,
             )
     elif target_type == "plan":
@@ -68,7 +69,8 @@ async def validate_correction_target(
         if not result.scalar_one_or_none():
             raise AppError(
                 "TARGET_NOT_FOUND",
-                f"target_type='plan' 的 target_id={target_id} 不存在或已删除（daily_plans 表中无此记录）",
+                "target_type='plan' 的 "
+                f"target_id={target_id} 不存在或已删除（daily_plans 表中无此记录）",
                 status_code=404,
             )
     elif target_type == "qa":
@@ -259,10 +261,18 @@ async def resolve_correction(
             upload.ocr_status = "completed"
             upload.is_manual_corrected = True
     elif correction.target_type == "knowledge":
+        valid_knowledge_statuses = {"未观察", "初步接触", "需要巩固", "基本掌握", "反复失误"}
         original = correction.original_content or {}
         sid = original.get("student_id")
         kpid = original.get("knowledge_point_id")
         new_status = (correction.corrected_content or {}).get("status")
+        if new_status and new_status not in valid_knowledge_statuses:
+            raise AppError(
+                "INVALID_KNOWLEDGE_STATUS",
+                f"无效的知识点状态: {new_status}，"
+                f"允许值: {', '.join(sorted(valid_knowledge_statuses))}",
+                status_code=400,
+            )
         if sid and kpid and new_status:
             status_result = await db.execute(
                 select(StudentKnowledgeStatus).where(
@@ -275,6 +285,9 @@ async def resolve_correction(
                 sk.status = new_status
                 sk.is_manual_corrected = True
                 sk.last_update_reason = f"admin_correction: {correction.correction_reason or ''}"
+    elif correction.target_type == "qa":
+        # QA corrections: mark the session as reviewed, no further action needed
+        pass
     elif correction.target_type == "plan":
         corrected_tasks = (correction.corrected_content or {}).get("tasks", [])
         if not corrected_tasks:
@@ -322,6 +335,25 @@ async def resolve_correction(
                 f"无法匹配 {len(unmatched)} 个任务到现有计划",
                 status_code=400,
             )
+
+        plan.tasks.sort(key=lambda task: task.sequence)
+        plan.source = "manual_adjusted"
+        plan.is_history_inferred = False
+        plan.plan_content = {
+            **(plan.plan_content or {}),
+            "tasks": [
+                {
+                    "subject_id": task.subject_id,
+                    "task_type": task.task_type,
+                    "title": task.task_content.get("title"),
+                    "description": task.task_content.get("description"),
+                    "knowledge_points": task.task_content.get("knowledge_point_ids", []),
+                    "sequence": task.sequence,
+                    "estimated_minutes": task.estimated_minutes,
+                }
+                for task in plan.tasks
+            ],
+        }
 
     correction.status = "resolved"
     await db.flush()
@@ -827,5 +859,6 @@ async def get_pending_count_by_type(db: AsyncSession) -> dict:
         "ocr": counts.get("ocr", 0),
         "knowledge": counts.get("knowledge", 0),
         "plan": counts.get("plan", 0),
+        "qa": counts.get("qa", 0),
         "total": sum(counts.values()),
     }

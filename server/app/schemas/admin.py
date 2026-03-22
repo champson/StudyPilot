@@ -18,7 +18,7 @@ class CorrectionOut(BaseModel):
     original_content: dict | None = None
     corrected_content: dict
     correction_reason: str | None = None
-    corrected_by: int
+    corrected_by: int | None = None
     status: str = "pending"
     created_at: datetime | None = None
 
@@ -109,6 +109,7 @@ class PendingCountByTypeOut(BaseModel):
     ocr: int = 0
     knowledge: int = 0
     plan: int = 0
+    qa: int = 0
     total: int = 0
 
 

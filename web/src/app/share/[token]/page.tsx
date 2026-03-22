@@ -6,6 +6,7 @@ import { Card, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageSkeleton } from "@/components/ui/skeleton";
 import { riskLevelLabels, formatMinutes } from "@/lib/utils";
+import { ERROR_CODES } from "@/lib/api";
 import type { ShareReport } from "@/types/api";
 import { env } from "@/lib/env";
 
@@ -42,21 +43,23 @@ export default function ShareReportPage() {
   );
 
   if (error) {
-    const status = error.status as number | undefined;
-    const isInvalid = status === 404;
-    const isExpired = status === 410 || status === 401;
+    const code = error.code as string | undefined;
+    const isInvalid = code === ERROR_CODES.AUTH_SHARE_TOKEN_INVALID;
+    const isExpired = code === ERROR_CODES.AUTH_SHARE_TOKEN_EXPIRED;
 
     return (
       <div className="min-h-screen bg-bg flex items-center justify-center px-4">
         <Card className="text-center max-w-sm">
           <p className="text-4xl mb-4">{isInvalid ? "🔗" : "⏰"}</p>
           <h2 className="text-lg font-semibold mb-2">
-            {isInvalid ? "链接无效" : "链接已过期"}
+            {isInvalid ? "链接无效" : isExpired ? "链接已过期" : "加载失败"}
           </h2>
           <p className="text-sm text-text-secondary">
             {isInvalid
               ? "此分享链接无效，请检查链接是否正确或联系分享者"
-              : "此分享链接已超过有效期，请联系学生获取新的分享链接"}
+              : isExpired
+                ? "此分享链接已超过有效期，请联系学生获取新的分享链接"
+                : "分享内容暂时无法加载，请稍后重试"}
           </p>
         </Card>
       </div>

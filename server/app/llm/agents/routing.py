@@ -32,7 +32,7 @@ def _heuristic_intent(
         return {"intent": "operate", "confidence": 0.8, "route_to": "none"}
     if any(token in lower for token in ("你好", "在吗", "哈哈", "天气")):
         return {"intent": "chat", "confidence": 0.7, "route_to": "none"}
-    if session_context != "新会话":
+    if session_context not in ("新会话", "new_session"):
         return {"intent": "follow_up", "confidence": 0.7, "route_to": "tutoring"}
     return DEFAULT_ROUTING_RESULT.copy()
 

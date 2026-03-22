@@ -12,8 +12,10 @@ import { useDailyPlan, useRecentUploads, useQAHistory, useErrorSummary, useWeekl
 import { formatRelativeTime, formatMinutes, modeLabels, uploadTypeLabels } from "@/lib/utils";
 import { getSubject } from "@/lib/subjects";
 import { api } from "@/lib/api";
+import { getStoredAuth } from "@/lib/auth";
 import type { StudyUpload, QASession, PlanTask } from "@/types/api";
 import { useToast } from "@/components/ui/toast";
+import { useRecentWeeks } from "@/components/report/week-selector";
 
 export default function DashboardPage() {
   const [mode, setMode] = useState("workday_follow");
@@ -25,7 +27,9 @@ export default function DashboardPage() {
   const { data: uploadsData } = useRecentUploads(1, 3);
   const { data: qaData } = useQAHistory(1, 3);
   const { data: errorSummary } = useErrorSummary();
-  const { data: weeklyReport } = useWeeklyReport();
+  const recentWeeks = useRecentWeeks();
+  const currentWeek = recentWeeks[0]?.value ?? null;
+  const { data: weeklyReport } = useWeeklyReport(currentWeek);
 
   // Sync mode from server when plan loads
   useEffect(() => {
@@ -67,7 +71,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-bg">
-      <AppHeader showMode currentMode={mode} onModeChange={handleModeChange} />
+      <AppHeader showMode currentMode={mode} onModeChange={handleModeChange} userName={getStoredAuth()?.userName} />
 
       <main className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-6">
         {planLoading ? (

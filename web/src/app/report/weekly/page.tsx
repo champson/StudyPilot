@@ -10,7 +10,7 @@ import { useToast } from "@/components/ui/toast";
 import { EmptyState } from "@/components/ui/empty-state";
 import { riskLevelLabels, trendLabels, formatMinutes } from "@/lib/utils";
 import { useWeeklyReport } from "@/lib/hooks";
-import { api } from "@/lib/api";
+import { api, ApiError, ERROR_CODES } from "@/lib/api";
 import { WeekSelector, useRecentWeeks } from "@/components/report/week-selector";
 
 function ComparisonTag({ current, previous, unit, invert }: { current: number; previous?: number | null; unit: string; invert?: boolean }) {
@@ -28,7 +28,25 @@ export default function WeeklyReportPage() {
   const weeks = useRecentWeeks();
   const [selectedWeek, setSelectedWeek] = useState(() => weeks[0]?.value);
   const { toast } = useToast();
-  const { data: report, isLoading } = useWeeklyReport(selectedWeek);
+  const currentWeek = weeks[0]?.value;
+  const fallbackWeek = weeks[1]?.value ?? null;
+  const {
+    data: primaryReport,
+    error: primaryError,
+    isLoading: primaryLoading,
+  } = useWeeklyReport(selectedWeek);
+  const shouldFallback =
+    selectedWeek === currentWeek &&
+    fallbackWeek !== null &&
+    primaryError instanceof ApiError &&
+    primaryError.code === ERROR_CODES.REPORT_NOT_FOUND;
+  const {
+    data: fallbackReport,
+    isLoading: fallbackLoading,
+  } = useWeeklyReport(shouldFallback ? fallbackWeek : null);
+  const report = primaryReport ?? fallbackReport;
+  const isLoading = primaryLoading || (shouldFallback && fallbackLoading);
+  const displayedWeek = primaryReport ? selectedWeek : fallbackReport ? fallbackWeek : selectedWeek;
 
   async function handleShare() {
     if (!report) return;
@@ -36,8 +54,10 @@ export default function WeeklyReportPage() {
       const result = await api.post<{ share_url: string; expires_at: string; share_token?: string }>(
         `/student/report/share?week=${encodeURIComponent(report.report_week)}`
       );
-      const sharePageUrl = `${window.location.origin}/share/${result.share_token}`;
-      await navigator.clipboard.writeText(sharePageUrl);
+      const shareUrl = result.share_token
+        ? `${window.location.origin}/share/${result.share_token}`
+        : `${window.location.origin}${result.share_url}`;
+      await navigator.clipboard.writeText(shareUrl);
       toast("分享链接已复制到剪贴板", "success");
     } catch {
       toast("生成分享链接失败", "error");
@@ -54,7 +74,7 @@ export default function WeeklyReportPage() {
         backHref="/dashboard"
         rightContent={
           <div className="flex items-center gap-2">
-            <WeekSelector value={selectedWeek} onChange={setSelectedWeek} />
+            <WeekSelector value={displayedWeek} onChange={setSelectedWeek} />
             <Button variant="outline" size="sm" onClick={handleShare}>分享</Button>
           </div>
         }

@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 
 from fastapi import UploadFile
@@ -10,6 +11,25 @@ from app.core.exceptions import AppError
 from app.models.upload import StudyUpload
 from app.tasks.ocr import process_ocr, run_ocr_pipeline_inline
 
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+
+ALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",  # images
+    ".pdf", ".doc", ".docx",  # documents
+    ".heic", ".heif",  # iOS photos
+}
+
+ALLOWED_UPLOAD_TYPES = {
+    "note", "homework", "test", "handout", "score",
+    "exercise", "exam",
+}
+
+UPLOAD_TYPE_ALIASES = {
+    "notes": "note",
+    "exercises": "exercise",
+    "exams": "exam",
+}
+
 
 async def handle_upload(
     db: AsyncSession,
@@ -18,9 +38,34 @@ async def handle_upload(
     upload_type: str,
     subject_id: int | None,
 ) -> StudyUpload:
-    content = await file.read()
+    upload_type = UPLOAD_TYPE_ALIASES.get(upload_type, upload_type)
+
+    if upload_type not in ALLOWED_UPLOAD_TYPES:
+        raise AppError(
+            "INVALID_UPLOAD_TYPE",
+            f"不支持的上传类型: {upload_type}",
+            status_code=400,
+            detail={"allowed": sorted(ALLOWED_UPLOAD_TYPES)},
+        )
+
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise AppError(
+            "UPLOAD_FILE_TOO_LARGE",
+            "文件大小超过 20MB 限制",
+            status_code=413,
+        )
+
     file_hash = hashlib.sha256(content).hexdigest()
-    ext = os.path.splitext(file.filename or "file")[1] or ".bin"
+    safe_name = os.path.basename(file.filename or "file")
+    ext = os.path.splitext(safe_name)[1].lower() or ".bin"
+    if ext not in ALLOWED_EXTENSIONS:
+        raise AppError(
+            "UPLOAD_UNSUPPORTED_FORMAT",
+            f"不支持的文件格式: {ext}",
+            status_code=400,
+            detail={"allowed": sorted(ALLOWED_EXTENSIONS)},
+        )
 
     upload_dir = os.path.join(settings.UPLOAD_DIR, str(student_id))
     os.makedirs(upload_dir, exist_ok=True)
@@ -116,5 +161,6 @@ async def _dispatch_ocr_task(
         else:
             process_ocr.delay(upload_id)
     except Exception:
-        # Broker 不可用时保持 pending，由测试或后台任务显式触发 pipeline。
-        return
+        logging.getLogger(__name__).warning(
+            "OCR dispatch failed for upload_id=%s, keeping pending status", upload_id, exc_info=True
+        )

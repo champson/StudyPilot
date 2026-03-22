@@ -1,25 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from sqlalchemy import text
 
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.exceptions import AppError, app_exception_handler
+from app.core.limiter import RateLimitExceeded, _rate_limit_exceeded_handler, limiter
 from app.core.logging import RequestIDMiddleware, get_logger, setup_logging
 from app.core.redis import get_redis_client
-
-# Rate limiter instance - can be imported by endpoint modules
-# 端点限流使用方式（在 endpoints 文件中）：
-# from app.main import limiter
-# @router.post("/some-endpoint")
-# @limiter.limit("10/minute")
-# async def some_endpoint(request: Request): ...
-limiter = Limiter(key_func=get_remote_address)
 
 
 def create_app() -> FastAPI:

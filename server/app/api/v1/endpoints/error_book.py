@@ -8,10 +8,12 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.common import PaginatedData, PaginatedResponse, SuccessResponse
 from app.schemas.error_book import (
+    BatchRecallOut,
     BatchRecallRequest,
     ErrorBookOut,
     ErrorSummaryOut,
     RecallResult,
+    RecallScheduleOut,
 )
 from app.services import error_book as svc
 
@@ -63,24 +65,46 @@ async def get_error_detail(
     return SuccessResponse(data=ErrorBookOut.model_validate(error))
 
 
-@router.post("/{error_id}/recall", response_model=SuccessResponse[ErrorBookOut])
+@router.post("/{error_id}/recall", response_model=SuccessResponse[RecallScheduleOut])
 async def recall_error(
+    error_id: int,
+    student_id: int = Depends(get_student_id),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_student),
+):
+    error = await svc.recall_error(db, student_id, error_id)
+    return SuccessResponse(
+        data=RecallScheduleOut(
+            error_id=error.id,
+            recall_scheduled=True,
+            message="已加入今日召回计划",
+        )
+    )
+
+
+@router.post("/{error_id}/recall-result", response_model=SuccessResponse[ErrorBookOut])
+async def submit_recall_result(
     error_id: int,
     body: RecallResult,
     student_id: int = Depends(get_student_id),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),
 ):
-    error = await svc.recall_error(db, student_id, error_id, body.result)
+    error = await svc.submit_recall_result(db, student_id, error_id, body.result)
     return SuccessResponse(data=ErrorBookOut.model_validate(error))
 
 
-@router.post("/batch-recall", response_model=SuccessResponse[list[ErrorBookOut]])
+@router.post("/batch-recall", response_model=SuccessResponse[BatchRecallOut])
 async def batch_recall(
     body: BatchRecallRequest,
     student_id: int = Depends(get_student_id),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_student),
 ):
-    errors = await svc.batch_recall(db, student_id, body.items)
-    return SuccessResponse(data=[ErrorBookOut.model_validate(e) for e in errors])
+    error_ids = await svc.batch_recall(db, student_id, body.error_ids)
+    return SuccessResponse(
+        data=BatchRecallOut(
+            scheduled_count=len(error_ids),
+            error_ids=error_ids,
+        )
+    )

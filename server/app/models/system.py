@@ -69,7 +69,7 @@ class ManualCorrection(Base):
     original_content: Mapped[dict | None] = mapped_column(JSONB)
     corrected_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     correction_reason: Mapped[str | None] = mapped_column(Text)
-    corrected_by: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    corrected_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", server_default="pending"
     )

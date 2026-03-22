@@ -3,36 +3,70 @@
 import logging
 import sys
 import uuid
+from typing import Any
 
-import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
 from app.core.config import settings
 
+try:
+    import structlog
+except ImportError:
+    structlog = None
+
+
+class FallbackLogger:
+    def __init__(self, name: str):
+        self._logger = logging.getLogger(name)
+
+    def _format(self, event: str, **kwargs: Any) -> str:
+        if not kwargs:
+            return event
+        details = " ".join(f"{key}={value!r}" for key, value in kwargs.items())
+        return f"{event} {details}"
+
+    def debug(self, event: str, **kwargs: Any) -> None:
+        self._logger.debug(self._format(event, **kwargs))
+
+    def info(self, event: str, **kwargs: Any) -> None:
+        self._logger.info(self._format(event, **kwargs))
+
+    def warning(self, event: str, **kwargs: Any) -> None:
+        self._logger.warning(self._format(event, **kwargs))
+
+    def error(self, event: str, **kwargs: Any) -> None:
+        self._logger.error(self._format(event, **kwargs))
+
+    async def ainfo(self, event: str, **kwargs: Any) -> None:
+        self.info(event, **kwargs)
+
 
 def setup_logging(log_level: str | None = None) -> None:
     """Configure structlog JSON logging.
-    
+
     Args:
         log_level: Optional log level override. If None, uses DEBUG when settings.DEBUG
                    is True, otherwise INFO.
     """
     if log_level is None:
         log_level = "DEBUG" if settings.DEBUG else "INFO"
-    
+
     # Configure standard logging first (for third-party libraries)
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=logging.getLevelName(log_level),
     )
-    
+
     # Quiet down noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-    
+
+    if structlog is None:
+        return
+
     # Configure structlog
     if settings.DEBUG:
         # Development: human-readable output
@@ -54,7 +88,7 @@ def setup_logging(log_level: str | None = None) -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(),
         ]
-    
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(
@@ -66,21 +100,23 @@ def setup_logging(log_level: str | None = None) -> None:
     )
 
 
-def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+def get_logger(name: str | None = None) -> Any:
     """Get a structlog logger instance.
-    
+
     Args:
         name: Optional logger name. If None, uses the calling module's name.
-        
+
     Returns:
         A bound structlog logger.
     """
+    if structlog is None:
+        return FallbackLogger(name or __name__)
     return structlog.get_logger(name or __name__)
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Middleware to add request ID tracing to all requests.
-    
+
     This middleware:
     - Extracts or generates a unique request ID for each request
     - Binds the request ID and other context to structlog's contextvars
@@ -91,20 +127,21 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         # Get or generate request ID
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-        
-        # Clear and bind context variables for this request
-        structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(
-            request_id=request_id,
-            method=request.method,
-            path=str(request.url.path),
-        )
-        
-        logger = structlog.get_logger()
+
+        if structlog is not None:
+            # Clear and bind context variables for this request
+            structlog.contextvars.clear_contextvars()
+            structlog.contextvars.bind_contextvars(
+                request_id=request_id,
+                method=request.method,
+                path=str(request.url.path),
+            )
+
+        logger = get_logger(__name__)
         await logger.ainfo("request_started")
-        
+
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
-        
+
         await logger.ainfo("request_completed", status_code=response.status_code)
         return response

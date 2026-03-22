@@ -1,6 +1,6 @@
-from datetime import UTC, datetime
-from collections import defaultdict
 import math
+from collections import defaultdict
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from app.core.exceptions import AppError
 from app.models.error_book import ErrorBook
 from app.models.knowledge import KnowledgeTree, StudentKnowledgeStatus
 from app.models.subject import Subject
+from app.services import knowledge as knowledge_svc
 
 
 async def list_errors(
@@ -129,26 +130,61 @@ async def get_error_detail(
 
 
 async def recall_error(
+    db: AsyncSession, student_id: int, error_id: int
+) -> ErrorBook:
+    return await get_error_detail(db, student_id, error_id)
+
+
+def _extract_knowledge_point_ids(error: ErrorBook) -> list[int]:
+    knowledge_point_ids: list[int] = []
+    for item in error.knowledge_points or []:
+        if isinstance(item, dict) and item.get("id") is not None:
+            knowledge_point_ids.append(int(item["id"]))
+        elif isinstance(item, int):
+            knowledge_point_ids.append(item)
+    return knowledge_point_ids
+
+
+async def submit_recall_result(
     db: AsyncSession, student_id: int, error_id: int, result_str: str
 ) -> ErrorBook:
     error = await get_error_detail(db, student_id, error_id)
     now = datetime.now(UTC)
-    error.is_recalled = True
+    error.is_recalled = result_str == "success"
     error.last_recall_at = now
     error.last_recall_result = result_str
     error.recall_count += 1
+
+    outcome = "recall_success" if result_str == "success" else "recall_fail"
+    for knowledge_point_id in _extract_knowledge_point_ids(error):
+        await knowledge_svc.update_mastery_state(
+            db,
+            student_id=student_id,
+            knowledge_point_id=knowledge_point_id,
+            outcome=outcome,
+            session_id=None,
+            reason=f"error_book_recall:{error.id}",
+        )
+
     await db.flush()
     return error
 
 
 async def batch_recall(
-    db: AsyncSession, student_id: int, items: list
-) -> list[ErrorBook]:
-    results = []
-    for item in items:
-        error = await recall_error(db, student_id, item.id, item.result)
-        results.append(error)
-    return results
+    db: AsyncSession, student_id: int, error_ids: list[int]
+) -> list[int]:
+    unique_ids = list(dict.fromkeys(error_ids))
+    if len(unique_ids) > DEFAULT_RECALL_BATCH_SIZE:
+        raise AppError(
+            "ERROR_BOOK_RECALL_BATCH_TOO_LARGE",
+            f"批量召回最多支持 {DEFAULT_RECALL_BATCH_SIZE} 题",
+            status_code=400,
+        )
+
+    for error_id in unique_ids:
+        await get_error_detail(db, student_id, error_id)
+
+    return unique_ids
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +215,7 @@ def _calculate_priority_score(
 ) -> float:
     """
     计算错题召回优先级分数
-    
+
     公式: priority_score = status_weight + recency_weight + importance_weight - recall_penalty
     - status_weight: 知识点掌握状态权重 (0-50)
     - recency_weight: 30 × e^(-days_since_error / 14) (0-30)
@@ -188,13 +224,13 @@ def _calculate_priority_score(
     """
     # 时间衰减权重: 14天半衰期
     recency_weight = 30 * math.exp(-days_since_error / 14)
-    
+
     # 重要性权重
     importance_weight = 20 * importance_score
-    
+
     # 召回惩罚
     recall_penalty = 10 * min(recall_count, 3)  # 最多扣 30 分
-    
+
     return status_weight + recency_weight + importance_weight - recall_penalty
 
 
@@ -206,7 +242,7 @@ async def get_recall_batch(
 ) -> list[ErrorBook]:
     """
     获取错题召回批次
-    
+
     规则:
     1. 按优先级分数降序排列
     2. 同一知识点最多选 3 题
@@ -214,7 +250,7 @@ async def get_recall_batch(
     4. 单次召回上限 20 题
     """
     now = datetime.now(UTC)
-    
+
     # 基础查询条件: 未召回、未删除、召回次数小于阈值
     conditions = [
         ErrorBook.student_id == student_id,
@@ -224,7 +260,7 @@ async def get_recall_batch(
     ]
     if subject_id is not None:
         conditions.append(ErrorBook.subject_id == subject_id)
-    
+
     # 查询错题列表 (多查一些用于后续过滤)
     error_result = await db.execute(
         select(ErrorBook)
@@ -233,10 +269,10 @@ async def get_recall_batch(
         .limit(batch_size * 3)
     )
     errors = error_result.scalars().all()
-    
+
     if not errors:
         return []
-    
+
     # 收集所有涉及的知识点 ID
     all_kp_ids: set[int] = set()
     for error in errors:
@@ -246,7 +282,7 @@ async def get_recall_batch(
                     all_kp_ids.add(int(kp["id"]))
                 elif isinstance(kp, int):
                     all_kp_ids.add(kp)
-    
+
     # 批量查询知识点重要性分数
     kp_importance_map: dict[int, float] = {}
     if all_kp_ids:
@@ -256,7 +292,7 @@ async def get_recall_batch(
         )
         for row in kp_result.all():
             kp_importance_map[row[0]] = float(row[1] or 0.5)
-    
+
     # 批量查询学生知识点状态
     kp_status_map: dict[int, str] = {}
     if all_kp_ids:
@@ -269,7 +305,7 @@ async def get_recall_batch(
         )
         for row in status_result.all():
             kp_status_map[row[0]] = row[1]
-    
+
     # 计算每道错题的优先级分数
     scored_errors: list[tuple[ErrorBook, float, int | None]] = []
     for error in errors:
@@ -281,17 +317,19 @@ async def get_recall_batch(
                 primary_kp_id = int(first_kp["id"])
             elif isinstance(first_kp, int):
                 primary_kp_id = first_kp
-        
+
         # 获取知识点状态权重
         status = kp_status_map.get(primary_kp_id, "未观察") if primary_kp_id else "未观察"
         status_weight = STATUS_WEIGHT_MAP.get(status, 10)
-        
+
         # 获取知识点重要性分数
         importance_score = kp_importance_map.get(primary_kp_id, 0.5) if primary_kp_id else 0.5
-        
+
         # 计算天数
-        days_since_error = (now - error.created_at).total_seconds() / 86400 if error.created_at else 0
-        
+        days_since_error = (
+            (now - error.created_at).total_seconds() / 86400 if error.created_at else 0
+        )
+
         # 计算优先级分数
         priority_score = _calculate_priority_score(
             status_weight,
@@ -299,26 +337,26 @@ async def get_recall_batch(
             importance_score,
             error.recall_count,
         )
-        
+
         scored_errors.append((error, priority_score, primary_kp_id))
-    
+
     # 按优先级分数降序排序
     scored_errors.sort(key=lambda x: x[1], reverse=True)
-    
+
     # 根据规则选择错题
     selected: list[ErrorBook] = []
     kp_count: dict[int, int] = defaultdict(int)
-    
+
     for error, score, primary_kp_id in scored_errors:
         if len(selected) >= batch_size:
             break
-        
+
         # 检查同一知识点数量限制
         if primary_kp_id and kp_count[primary_kp_id] >= MAX_ERRORS_PER_KNOWLEDGE_POINT:
             continue
-        
+
         selected.append(error)
         if primary_kp_id:
             kp_count[primary_kp_id] += 1
-    
+
     return selected

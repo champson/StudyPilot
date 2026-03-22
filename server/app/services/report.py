@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -22,8 +23,15 @@ from app.services.knowledge import (
 
 def _week_bounds(report_week: str | None = None) -> tuple[str, date, date]:
     if report_week:
-        year_str, week_str = report_week.split("-W")
-        week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+        try:
+            year_str, week_str = report_week.split("-W")
+            week_start = date.fromisocalendar(int(year_str), int(week_str), 1)
+        except (ValueError, TypeError):
+            raise AppError(
+                "INVALID_WEEK_FORMAT",
+                f"无效的周次格式: {report_week}，期望格式: YYYY-WNN",
+                status_code=400,
+            )
     else:
         today = date.today()
         iso = today.isocalendar()
@@ -284,15 +292,23 @@ async def generate_weekly_reports(
     student_ids = [row[0] for row in result.all()]
     reports = []
     for student_id in student_ids:
-        reports.append(await upsert_weekly_report(db, student_id, report_week))
+        try:
+            reports.append(await upsert_weekly_report(db, student_id, report_week))
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to generate weekly report for student %s", student_id, exc_info=True
+            )
     return reports
 
 
 async def get_previous_week_report(
     db: AsyncSession, student_id: int, current_week: str
 ) -> WeeklyReport | None:
-    year_str, week_str = current_week.split("-W")
-    year, week_num = int(year_str), int(week_str)
+    try:
+        year_str, week_str = current_week.split("-W")
+        year, week_num = int(year_str), int(week_str)
+    except (ValueError, TypeError):
+        return None
     if week_num == 1:
         # Dec 28 always belongs to the last ISO week of its year
         last_week_date = date(year - 1, 12, 28)

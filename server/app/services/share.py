@@ -12,14 +12,30 @@ def decode_share_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.SHARE_TOKEN_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
-        raise AppError("SHARE_EXPIRED", "分享链接已过期", status_code=410)
+        raise AppError(
+            "AUTH_SHARE_TOKEN_EXPIRED",
+            "分享链接已过期",
+            status_code=401,
+        )
     except jwt.InvalidTokenError:
-        raise AppError("SHARE_INVALID", "无效的分享链接", status_code=400)
+        raise AppError(
+            "AUTH_SHARE_TOKEN_INVALID",
+            "无效的分享链接",
+            status_code=401,
+        )
 
     if payload.get("type") != "share":
-        raise AppError("SHARE_INVALID", "无效的分享链接", status_code=400)
+        raise AppError(
+            "AUTH_SHARE_TOKEN_INVALID",
+            "无效的分享链接",
+            status_code=401,
+        )
     if not payload.get("report_week"):
-        raise AppError("SHARE_INVALID", "分享链接缺少周报信息", status_code=400)
+        raise AppError(
+            "AUTH_SHARE_TOKEN_INVALID",
+            "分享链接缺少周报信息",
+            status_code=401,
+        )
     return payload
 
 

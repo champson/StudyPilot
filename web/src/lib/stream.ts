@@ -54,6 +54,7 @@ export async function streamRequest(path: string, options: StreamOptions = {}) {
       if (response.status === 401 || response.status === 403) {
         if (typeof window !== "undefined") {
           for (const key of AUTH_STORAGE_KEYS) localStorage.removeItem(key);
+          document.cookie = "access_token=; path=/; max-age=0";
           window.location.href = "/login";
         }
       }
@@ -71,13 +72,12 @@ export async function streamRequest(path: string, options: StreamOptions = {}) {
     // Clear initial timeout since connection is established
     // Set up a new timeout for reading (reset on each chunk)
     let readTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
     const resetReadTimeout = () => {
       if (readTimeoutId) clearTimeout(readTimeoutId);
       readTimeoutId = setTimeout(() => {
+        timedOut = true;
         reader.cancel();
-        if (options.onError) {
-          options.onError(new Error('流式请求超时'));
-        }
       }, timeout);
     };
 
@@ -110,6 +110,14 @@ export async function streamRequest(path: string, options: StreamOptions = {}) {
         }
       }
 
+      if (readTimeoutId) clearTimeout(readTimeoutId);
+
+      // Distinguish timeout-induced cancellation from normal end-of-stream
+      if (timedOut) {
+        if (options.onError) options.onError(new Error("流式请求超时"));
+        return;
+      }
+
       // Process any remaining buffer
       if (buffer.startsWith("data: ")) {
         const data = buffer.slice(6);
@@ -118,7 +126,6 @@ export async function streamRequest(path: string, options: StreamOptions = {}) {
         }
       }
 
-      if (readTimeoutId) clearTimeout(readTimeoutId);
       if (options.onDone) options.onDone();
     } finally {
       if (readTimeoutId) clearTimeout(readTimeoutId);

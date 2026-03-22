@@ -63,8 +63,8 @@ function hasRouteAccess(pathname: string, role: string): boolean {
     return role === "parent";
   }
 
-  // Other protected routes: student or parent
-  return role === "student" || role === "parent";
+  // Student routes: only student (not parent)
+  return role === "student";
 }
 
 export function middleware(request: NextRequest) {

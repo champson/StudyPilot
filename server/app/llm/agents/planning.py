@@ -90,9 +90,11 @@ def rule_based_ranking(context: dict[str, Any]) -> list[dict[str, Any]]:
     return ranked
 
 
-def build_fallback_plan(context: dict[str, Any], *, error_reason: str | None = None) -> dict[str, Any]:
+def build_fallback_plan(
+    context: dict[str, Any], *, error_reason: str | None = None
+) -> dict[str, Any]:
     """Build fallback plan when LLM fails.
-    
+
     Returns a rule-based plan with generation_context indicating fallback source.
     """
     ranked = rule_based_ranking(context)
@@ -105,7 +107,7 @@ def build_fallback_plan(context: dict[str, Any], *, error_reason: str | None = N
             **GENERIC_FALLBACK_PLAN,
             "reasoning": error_reason or "LLM 不可用，无可用学科。",
         }
-    
+
     selected = ranked[: _subject_limit(context.get("available_minutes", 120))]
     tasks: list[dict[str, Any]] = []
     sequence = 1
@@ -141,9 +143,9 @@ def build_fallback_plan(context: dict[str, Any], *, error_reason: str | None = N
             tasks.append(
                 {
                     "subject_id": item["subject_id"],
-                    "task_type": "review",
-                    "title": f"{item['subject_name']}重点复习",
-                    "description": "围绕本周薄弱点做一轮复习，整理 3 个关键知识点。",
+                    "task_type": "consolidation",
+                    "title": f"{item['subject_name']}重点巩固",
+                    "description": "围绕本周薄弱点做一轮巩固，整理 3 个关键知识点。",
                     "knowledge_points": [],
                     "sequence": sequence,
                     "estimated_minutes": 25 if sequence == 1 else 20,
@@ -180,7 +182,7 @@ async def generate_plan_payload(
     student_id: int | None = None,
 ) -> dict[str, Any]:
     """Generate learning plan using LLM.
-    
+
     On failure:
     - Returns rule-based fallback plan with generation_context
     - Does not raise exception

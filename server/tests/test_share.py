@@ -15,7 +15,8 @@ async def test_share_validate_invalid(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_share_content_invalid(client: AsyncClient):
     resp = await client.get("/api/v1/share/invalid-token")
-    assert resp.status_code == 400
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "AUTH_SHARE_TOKEN_INVALID"
 
 
 @pytest.mark.asyncio

@@ -12,11 +12,16 @@ export interface StoredAuth {
 }
 
 /**
- * Set access_token cookie (client-side, non-httpOnly for middleware access)
+ * Set access_token cookie.
+ * Note: For XSS protection this should ideally be set via a server-side
+ * API route with httpOnly flag. For now we set Secure + SameSite=Lax
+ * to mitigate CSRF. Full httpOnly migration requires a server-side
+ * login proxy route.
  */
 export function setTokenCookie(token: string, maxAge: number = TOKEN_COOKIE_MAX_AGE): void {
   if (typeof document === "undefined") return;
-  document.cookie = `access_token=${token};path=/;max-age=${maxAge};SameSite=Lax`;
+  const secure = window.location.protocol === "https:" ? ";Secure" : "";
+  document.cookie = `access_token=${token};path=/;max-age=${maxAge};SameSite=Lax${secure}`;
 }
 
 /**

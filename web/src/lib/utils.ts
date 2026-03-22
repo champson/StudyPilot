@@ -47,6 +47,7 @@ export const taskTypeLabels: Record<string, { label: string; icon: string }> = {
   practice: { label: "巩固练习", icon: "✏️" },
   error_review: { label: "错题回顾", icon: "📕" },
   consolidation: { label: "同类题巩固", icon: "🔄" },
+  review: { label: "重点复习", icon: "📖" },
 };
 
 export const modeLabels: Record<string, string> = {

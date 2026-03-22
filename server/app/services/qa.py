@@ -1,9 +1,11 @@
 import json
+import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,10 +19,15 @@ from app.llm.agents.tutoring import (
 )
 from app.llm.model_router import get_model_router
 from app.llm.prompts import TUTORING_SYSTEM_PROMPT
-from app.models.knowledge import KnowledgeTree
+from app.models.knowledge import KnowledgeTree, StudentKnowledgeStatus
 from app.models.qa import QaMessage, QaSession
+from app.models.subject import Subject
 from app.models.system import ManualCorrection
 from app.services.knowledge import apply_assessment_results, resolve_knowledge_points_by_names
+
+logger = logging.getLogger(__name__)
+
+SESSION_REUSE_MINUTES = 30
 
 
 async def _load_or_create_session(
@@ -42,6 +49,33 @@ async def _load_or_create_session(
         if not session:
             raise AppError("SESSION_NOT_FOUND", "会话不存在", status_code=404)
         return session
+
+    # Try to reuse an active session within the timeout window
+    threshold = datetime.now(UTC) - timedelta(minutes=SESSION_REUSE_MINUTES)
+    active_result = await db.execute(
+        select(QaSession)
+        .where(
+            QaSession.student_id == student_id,
+            QaSession.status == "active",
+        )
+        .order_by(QaSession.created_at.desc())
+        .limit(1)
+    )
+    active_session = active_result.scalar_one_or_none()
+
+    if active_session:
+        # Check last message time
+        last_msg_result = await db.execute(
+            select(func.max(QaMessage.created_at))
+            .where(QaMessage.session_id == active_session.id)
+        )
+        last_msg_time = last_msg_result.scalar()
+        last_activity = last_msg_time or active_session.created_at
+
+        if last_activity and last_activity >= threshold:
+            return active_session
+        # Expired — close the old session
+        active_session.status = "closed"
 
     session = QaSession(
         student_id=student_id,
@@ -181,12 +215,42 @@ async def _assess_and_apply(
         db=db,
         student_id=student_id,
     )
+    if assessment is None:
+        logger.warning("assess_session returned None for session %s, skipping", session.id)
+        return
     await apply_assessment_results(
         db,
         student_id=student_id,
         session=session,
         assessment=assessment,
     )
+
+
+async def _build_student_context(
+    db: AsyncSession, student_id: int, subject_id: int | None
+) -> str:
+    """Build a short student knowledge context string for the tutoring prompt."""
+    conditions = [StudentKnowledgeStatus.student_id == student_id]
+    if subject_id is not None:
+        conditions.append(KnowledgeTree.subject_id == subject_id)
+    result = await db.execute(
+        select(
+            KnowledgeTree.name,
+            StudentKnowledgeStatus.status,
+            Subject.name.label("subject_name"),
+        )
+        .join(KnowledgeTree, StudentKnowledgeStatus.knowledge_point_id == KnowledgeTree.id)
+        .join(Subject, KnowledgeTree.subject_id == Subject.id)
+        .where(*conditions)
+        .where(StudentKnowledgeStatus.status.in_(["反复失误", "需要巩固", "初步接触"]))
+        .order_by(StudentKnowledgeStatus.last_updated_at.desc())
+        .limit(10)
+    )
+    rows = result.all()
+    if not rows:
+        return ""
+    lines = [f"- {row.subject_name}/{row.name}: {row.status}" for row in rows]
+    return "\n## 该学生的薄弱知识点\n" + "\n".join(lines)
 
 
 async def _build_tutoring_response(
@@ -198,15 +262,18 @@ async def _build_tutoring_response(
     latest_message: str,
 ) -> tuple[str, dict[str, Any]]:
     router = get_model_router()
+    student_context = await _build_student_context(db, student_id, subject_id)
+    system_prompt = TUTORING_SYSTEM_PROMPT + student_context
     try:
         content, _meta = await router.invoke(
             "tutoring",
-            [{"role": "system", "content": TUTORING_SYSTEM_PROMPT}, *messages],
+            [{"role": "system", "content": system_prompt}, *messages],
             db=db,
             student_id=student_id,
             max_tokens=1200,
         )
     except Exception:
+        logger.exception("Tutoring LLM call failed, using fallback. student_id=%s", student_id)
         content = build_fallback_tutoring_response(
             latest_message,
             await _default_knowledge_points(db, subject_id),
@@ -366,16 +433,19 @@ async def chat_stream(
 
         messages = await _load_messages(db, session.id)
         router = get_model_router()
+        student_context = await _build_student_context(db, student_id, subject_id)
+        system_prompt = TUTORING_SYSTEM_PROMPT + student_context
         raw_stream = None
         try:
             raw_stream = router.invoke_stream(
                 "tutoring",
-                [{"role": "system", "content": TUTORING_SYSTEM_PROMPT}, *messages],
+                [{"role": "system", "content": system_prompt}, *messages],
                 db=db,
                 student_id=student_id,
                 max_tokens=1200,
             )
         except Exception:
+            logger.exception("Tutoring stream init failed. student_id=%s", student_id)
             raw_stream = None
 
         raw_content = ""
@@ -437,17 +507,23 @@ async def chat_stream(
             tutoring_strategy=strategy,
             knowledge_points=knowledge_points,
         )
-        await _assess_and_apply(
-            db,
-            student_id=student_id,
-            session=session,
-            subject_id=subject_id,
-            knowledge_points=knowledge_points,
-        )
 
+        # Yield [DONE] before assessment so frontend isn't blocked
         yield _serialize_sse_event({"type": "knowledge_points", "data": knowledge_points})
         yield _serialize_sse_event({"type": "strategy", "data": strategy})
         yield _serialize_sse_event("[DONE]")
+
+        # Assessment runs after stream closes — doesn't block user
+        try:
+            await _assess_and_apply(
+                db,
+                student_id=student_id,
+                session=session,
+                subject_id=subject_id,
+                knowledge_points=knowledge_points,
+            )
+        except Exception:
+            logger.exception("Post-stream assessment failed. session_id=%s", session.id)
 
     return session, event_stream()
 
@@ -460,20 +536,26 @@ async def list_sessions(
     )
     total = count_result.scalar() or 0
 
+    msg_count_subq = (
+        select(
+            QaMessage.session_id,
+            func.count(QaMessage.id).label("message_count"),
+        )
+        .group_by(QaMessage.session_id)
+        .subquery()
+    )
+
     result = await db.execute(
-        select(QaSession)
+        select(QaSession, func.coalesce(msg_count_subq.c.message_count, 0))
+        .outerjoin(msg_count_subq, QaSession.id == msg_count_subq.c.session_id)
         .where(QaSession.student_id == student_id)
         .order_by(QaSession.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    sessions = result.scalars().all()
 
     items = []
-    for session in sessions:
-        msg_count = await db.execute(
-            select(func.count(QaMessage.id)).where(QaMessage.session_id == session.id)
-        )
+    for session, message_count in result.all():
         items.append(
             {
                 "id": session.id,
@@ -481,7 +563,7 @@ async def list_sessions(
                 "subject_id": session.subject_id,
                 "status": session.status,
                 "created_at": session.created_at,
-                "message_count": msg_count.scalar() or 0,
+                "message_count": message_count,
             }
         )
     return items, total
@@ -547,22 +629,17 @@ async def _count_sessions_for_kp_in_hours(
     """
     cutoff_time = datetime.now(UTC) - timedelta(hours=hours)
     
-    # 查询包含该知识点的消息所属的会话
-    # 使用 JSONB 查询匹配知识点
+    kp_filter = cast([{"id": knowledge_point_id}], JSONB)
     session_ids_result = await db.execute(
-        select(QaMessage.session_id)
-        .distinct()
+        select(func.count(func.distinct(QaMessage.session_id)))
         .join(QaSession, QaMessage.session_id == QaSession.id)
         .where(
             QaSession.student_id == student_id,
             QaSession.created_at >= cutoff_time,
-            QaMessage.knowledge_points.op('@>')(
-                f'[{{"id": {knowledge_point_id}}}]'
-            ),
+            QaMessage.knowledge_points.op("@>")(kp_filter),
         )
     )
-    session_ids = session_ids_result.scalars().all()
-    return len(session_ids)
+    return session_ids_result.scalar() or 0
 
 
 async def _get_recent_sessions_for_kp(
@@ -574,19 +651,24 @@ async def _get_recent_sessions_for_kp(
     """
     获取某知识点最近的 N 个答疑会话
     """
-    # 查询包含该知识点的消息所属的会话
-    session_ids_result = await db.execute(
-        select(QaMessage.session_id)
-        .distinct()
+    kp_filter = cast([{"id": knowledge_point_id}], JSONB)
+    session_ids_subq = (
+        select(
+            QaMessage.session_id,
+            func.max(QaSession.created_at).label("latest"),
+        )
         .join(QaSession, QaMessage.session_id == QaSession.id)
         .where(
             QaSession.student_id == student_id,
-            QaMessage.knowledge_points.op('@>')(
-                f'[{{"id": {knowledge_point_id}}}]'
-            ),
+            QaMessage.knowledge_points.op("@>")(kp_filter),
         )
-        .order_by(QaSession.created_at.desc())
+        .group_by(QaMessage.session_id)
+        .order_by(func.max(QaSession.created_at).desc())
         .limit(count)
+        .subquery()
+    )
+    session_ids_result = await db.execute(
+        select(session_ids_subq.c.session_id)
     )
     session_ids = session_ids_result.scalars().all()
     
@@ -648,7 +730,7 @@ async def _create_qa_correction(
         },
         corrected_content={},  # 纠偏内容待管理员填写
         correction_reason=reason,
-        corrected_by=0,  # 系统自动创建，使用 0 标识
+        corrected_by=None,  # 系统自动创建，管理员处理时填入
         status="pending",
     )
     db.add(correction)

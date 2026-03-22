@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ErrorBookOut(BaseModel):
@@ -39,13 +40,19 @@ class ErrorSummaryOut(BaseModel):
 
 
 class RecallResult(BaseModel):
-    result: str  # "correct" | "incorrect" | "partial"
+    result: Literal["success", "fail"]
 
 
-class BatchRecallItem(BaseModel):
-    id: int
-    result: str
+class RecallScheduleOut(BaseModel):
+    error_id: int
+    recall_scheduled: bool
+    message: str
 
 
 class BatchRecallRequest(BaseModel):
-    items: list[BatchRecallItem]
+    error_ids: list[int] = Field(min_length=1, max_length=20)
+
+
+class BatchRecallOut(BaseModel):
+    scheduled_count: int
+    error_ids: list[int]

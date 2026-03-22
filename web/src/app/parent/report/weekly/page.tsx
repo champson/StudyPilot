@@ -8,6 +8,7 @@ import { PageSkeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { riskLevelLabels, formatMinutes } from "@/lib/utils";
 import { useParentWeeklyReport } from "@/lib/hooks";
+import { ApiError, ERROR_CODES } from "@/lib/api";
 import { WeekSelector, useRecentWeeks } from "@/components/report/week-selector";
 
 function ComparisonTag({ current, previous, unit, invert }: { current: number; previous?: number | null; unit: string; invert?: boolean }) {
@@ -24,7 +25,25 @@ function ComparisonTag({ current, previous, unit, invert }: { current: number; p
 export default function ParentWeeklyReportPage() {
   const weeks = useRecentWeeks();
   const [selectedWeek, setSelectedWeek] = useState(() => weeks[0]?.value);
-  const { data: report, isLoading } = useParentWeeklyReport(selectedWeek);
+  const currentWeek = weeks[0]?.value;
+  const fallbackWeek = weeks[1]?.value ?? null;
+  const {
+    data: primaryReport,
+    error: primaryError,
+    isLoading: primaryLoading,
+  } = useParentWeeklyReport(selectedWeek);
+  const shouldFallback =
+    selectedWeek === currentWeek &&
+    fallbackWeek !== null &&
+    primaryError instanceof ApiError &&
+    primaryError.code === ERROR_CODES.REPORT_NOT_FOUND;
+  const {
+    data: fallbackReport,
+    isLoading: fallbackLoading,
+  } = useParentWeeklyReport(shouldFallback ? fallbackWeek : null);
+  const report = primaryReport ?? fallbackReport;
+  const isLoading = primaryLoading || (shouldFallback && fallbackLoading);
+  const displayedWeek = primaryReport ? selectedWeek : fallbackReport ? fallbackWeek : selectedWeek;
 
   if (isLoading) return <><PageHeader title="孩子学习周报" /><PageSkeleton /></>;
   if (!report) return <><PageHeader title="孩子学习周报" /><div className="max-w-4xl mx-auto px-4 py-12"><EmptyState icon="📊" title="暂无周报数据" description="孩子完成一周学习后将自动生成" /></div></>;
@@ -32,7 +51,7 @@ export default function ParentWeeklyReportPage() {
   return (
     <div className="min-h-screen bg-bg">
       <PageHeader title="孩子学习周报（家长视角）" rightContent={
-        <WeekSelector value={selectedWeek} onChange={setSelectedWeek} />
+        <WeekSelector value={displayedWeek} onChange={setSelectedWeek} />
       } />
 
       <main className="max-w-4xl mx-auto px-4 md:px-6 py-4 md:py-6">

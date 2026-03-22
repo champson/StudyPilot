@@ -30,36 +30,70 @@ def current_week_string(target_date: date | None = None) -> str:
 
 
 async def get_knowledge_status(
-    db: AsyncSession, student_id: int, subject_id: int | None = None
-) -> list[dict]:
+    db: AsyncSession,
+    student_id: int,
+    subject_id: int | None = None,
+    status: str | None = None,
+    min_importance: float | None = None,
+) -> dict[str, Any]:
     query = (
-        select(StudentKnowledgeStatus, KnowledgeTree.name, KnowledgeTree.subject_id)
+        select(
+            StudentKnowledgeStatus,
+            KnowledgeTree.name,
+            KnowledgeTree.subject_id,
+            KnowledgeTree.level,
+            KnowledgeTree.importance_score,
+            Subject.name,
+        )
         .join(
             KnowledgeTree,
             StudentKnowledgeStatus.knowledge_point_id == KnowledgeTree.id,
         )
+        .join(Subject, KnowledgeTree.subject_id == Subject.id)
         .where(StudentKnowledgeStatus.student_id == student_id)
     )
     if subject_id is not None:
         query = query.where(KnowledgeTree.subject_id == subject_id)
+    if status is not None:
+        query = query.where(StudentKnowledgeStatus.status == status)
+    if min_importance is not None:
+        query = query.where(KnowledgeTree.importance_score >= min_importance)
 
     result = await db.execute(query)
     rows = result.all()
 
-    return [
+    items = [
         {
-            "id": row[0].id,
-            "student_id": row[0].student_id,
             "knowledge_point_id": row[0].knowledge_point_id,
+            "knowledge_point_name": row[1],
+            "subject_id": row[2],
+            "subject_name": row[5],
+            "level": row[3],
             "status": row[0].status,
-            "last_update_reason": row[0].last_update_reason,
+            "importance_score": (
+                float(row[4]) if row[4] is not None else None
+            ),
             "last_updated_at": row[0].last_updated_at,
             "is_manual_corrected": row[0].is_manual_corrected,
-            "point_name": row[1],
-            "subject_id": row[2],
         }
         for row in rows
     ]
+
+    by_status = {
+        NOT_OBSERVED: 0,
+        INITIAL_CONTACT: 0,
+        NEEDS_CONSOLIDATION: 0,
+        BASICALLY_MASTERED: 0,
+        REPEATED_MISTAKES: 0,
+    }
+    for item in items:
+        by_status[item["status"]] = by_status.get(item["status"], 0) + 1
+
+    return {
+        "total": len(items),
+        "by_status": by_status,
+        "items": items,
+    }
 
 
 async def aggregate_knowledge_mastery_by_subject(

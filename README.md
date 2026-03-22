@@ -2,7 +2,13 @@
 
 面向上海高中学生的个性化 AI 辅学系统。产品围绕学校教学节奏运行，通过每日计划、内容上传、实时答疑、错题沉淀与召回、周报反馈，帮助学生在有限课后时间内完成查缺补漏和阶段提分。
 
-当前仓库以产品设计和方案沉淀为主，第一阶段目标是跑通小范围真实学生的 MVP 闭环，而不是先做一个大而全的平台。
+当前仓库已经包含一套可运行的 MVP 工程实现：
+
+- `server/`：FastAPI API、Celery worker / beat、Alembic 迁移、PostgreSQL / Redis 接入
+- `web/`：Next.js App Router 前端
+- `docs/`：PRD、接口契约、阶段设计与复查文档
+
+第一阶段目标仍然是跑通小范围真实学生的 MVP 闭环，而不是先做一个大而全的平台。
 
 ## 项目目标
 
@@ -182,6 +188,194 @@ MVP 围绕一个学生学习工作台和五个核心模块展开：
 - 技术架构设计
 - 接口与数据模型设计
 
+## 工程结构
+
+```text
+.
+├── server/                 # FastAPI 后端
+│   ├── app/                # API / services / models / tasks
+│   ├── alembic/            # 数据库迁移
+│   ├── tests/              # 后端测试
+│   ├── docker-compose.yml  # 本地后端一键依赖
+│   └── docker-compose.prod.yml
+├── web/                    # Next.js 前端
+└── docs/                   # 产品与技术文档
+```
+
+## 本地运行
+
+### 1. 前置依赖
+
+- Python 3.11+
+- Node.js 20+
+- PostgreSQL 15+
+- Redis 7+
+
+### 2. 配置环境变量
+
+后端：
+
+```bash
+cd server
+cp .env.example .env
+```
+
+前端：
+
+```bash
+cd web
+cp .env.example .env.local
+```
+
+默认前端变量：
+
+```bash
+NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1
+```
+
+### 3. 启动后端
+
+```bash
+cd server
+python -m pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+如需异步 OCR / 周报任务，再启动 worker 和 beat：
+
+```bash
+cd server
+celery -A app.tasks.celery_app:celery worker -l info
+celery -A app.tasks.celery_app:celery beat -l info
+```
+
+### 4. 启动前端
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+默认访问：
+
+- 前端：`http://localhost:3000`
+- 后端：`http://localhost:8000`
+- 健康检查：`http://localhost:8000/health`
+
+## 使用 Docker 启动后端依赖
+
+如果你本地有 Docker，可以直接启动 PostgreSQL、Redis、API、worker、beat：
+
+```bash
+cd server
+docker compose up --build
+```
+
+说明：
+
+- 该 compose 只覆盖后端栈，不包含 `web/`
+- API 会读取 [server/.env.example](server/.env.example) 中的默认配置
+- 容器内数据库地址是 `db:5432`，宿主机直连地址是 `localhost:5432`
+
+## 生产部署
+
+当前仓库推荐“前后端分离”部署：
+
+- 后端：Docker Compose / VM / 容器平台
+- 前端：Vercel、Node 进程、或任意支持 Next.js `build + start` 的平台
+
+### 后端生产部署
+
+1. 准备生产环境变量：
+
+```bash
+cd server
+cp .env.example .env
+```
+
+至少修改这些值：
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `JWT_SECRET_KEY`
+- `SHARE_TOKEN_SECRET`
+- `ADMIN_PASSWORD`
+- `DEBUG=false`
+
+2. 启动生产 compose：
+
+```bash
+cd server
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+说明：
+
+- `api` 容器启动时会自动执行 `alembic upgrade head`
+- `worker` 负责 OCR、周报等异步任务
+- `beat` 负责定时任务调度
+- `nginx` 负责 `/api/*` 反向代理与 `/uploads/*` 静态文件分发
+
+建议上线前确认：
+
+- `DB_PASSWORD` 已设置为强密码
+- `JWT_SECRET_KEY` / `SHARE_TOKEN_SECRET` 不再使用默认值
+- `uploads` 卷路径有备份策略
+- `HTTP_PORT`、`API_WORKERS`、`LOG_LEVEL` 已按机器规格调整
+
+### 前端生产部署
+
+最小要求：
+
+```bash
+cd web
+npm install
+npm run build
+NEXT_PUBLIC_API_BASE=https://your-api-domain/api/v1 npm run start
+```
+
+部署时必须设置：
+
+- `NEXT_PUBLIC_API_BASE`
+
+建议把它指向生产 API 域名，例如：
+
+```bash
+NEXT_PUBLIC_API_BASE=https://api.example.com/api/v1
+```
+
+如果前端与后端分开部署，请同时确认：
+
+- 后端 `CORS_ORIGINS` 允许前端域名
+- Nginx / 反向代理对 SSE 路径 `/api/v1/student/qa/chat/stream` 关闭缓冲
+- 分享页 `/share/[token]` 能访问到同一套后端 API
+
+## 验证命令
+
+后端：
+
+```bash
+cd server
+pytest -q
+ruff check .
+```
+
+前端：
+
+```bash
+cd web
+npm run lint
+npm run build
+```
+
 ## 当前状态
 
-当前仓库主要处于产品定义阶段，重点是先把真实学生场景中的学习闭环设计清楚，再决定工程实现路径。技术实现可以采用多 Agent、大模型、OCR、外部题目能力和人工兜底的组合，但这些是实现方案，不是产品需求本身。
+当前仓库已经具备 MVP 工程骨架与主要主链路实现，重点工作转向：
+
+- 持续对齐产品设计、接口契约与代码实现
+- 用小规模真实学生验证上传 → 计划 → 答疑 → 错题 → 周报闭环
+- 在不打断主流程的前提下完善人工纠偏与异步任务稳定性
+
+技术实现可以采用多 Agent、大模型、OCR、外部题目能力和人工兜底的组合，但这些是实现方案，不是产品需求本身。

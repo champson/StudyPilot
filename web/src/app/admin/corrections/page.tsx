@@ -21,6 +21,7 @@ const TYPE_TABS = [
   { value: "ocr", label: "OCR 纠偏" },
   { value: "knowledge", label: "知识点纠偏" },
   { value: "plan", label: "计划纠偏" },
+  { value: "qa", label: "答疑纠偏" },
 ];
 
 export default function CorrectionsPage() {
@@ -159,7 +160,7 @@ export default function CorrectionsPage() {
                   {selectedId && detail ? (
                     <Card className="sticky top-4">
                       <CardTitle>
-                        {detail.target_type === "ocr" ? "OCR 纠偏" : detail.target_type === "knowledge" ? "知识点纠偏" : "计划纠偏"}
+                        {detail.target_type === "ocr" ? "OCR 纠偏" : detail.target_type === "knowledge" ? "知识点纠偏" : detail.target_type === "qa" ? "答疑纠偏" : "计划纠偏"}
                         <span className="text-text-tertiary font-normal ml-2">#{detail.id}</span>
                       </CardTitle>
 
@@ -205,6 +206,38 @@ export default function CorrectionsPage() {
                           <div className="flex items-center gap-2">
                             <Button size="sm" onClick={() => handleResolve(detail.corrected_content)}>
                               确认并处理
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>跳过</Button>
+                          </div>
+                        </div>
+                      )}
+
+                      {detail.target_type === "qa" && (
+                        <div className="space-y-4">
+                          {detail.original_content && (
+                            <div>
+                              <p className="text-xs text-text-tertiary mb-2">答疑信息</p>
+                              <div className="p-3 bg-gray-50 rounded-lg space-y-1.5">
+                                <p className="text-sm">
+                                  <span className="text-text-tertiary">触发原因：</span>
+                                  {String(detail.original_content.alert_type)}
+                                </p>
+                                <p className="text-sm">
+                                  <span className="text-text-tertiary">会话ID：</span>
+                                  #{detail.target_id}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          {detail.correction_reason && (
+                            <div>
+                              <p className="text-xs text-text-tertiary mb-2">纠偏原因</p>
+                              <p className="text-sm bg-gray-50 p-3 rounded-lg">{detail.correction_reason}</p>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <Button size="sm" onClick={() => handleResolve(detail.corrected_content || {})}>
+                              确认已处理
                             </Button>
                             <Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>跳过</Button>
                           </div>

@@ -202,7 +202,7 @@ export interface ErrorBookItem {
   is_explained: boolean;
   is_recalled: boolean;
   last_recall_at?: string;
-  last_recall_result?: string;
+  last_recall_result?: "success" | "fail" | null;
   recall_count: number;
   source_upload_id?: number;
   created_at: string;
@@ -220,6 +220,24 @@ export interface ErrorSummary {
   unrecalled: number;
   by_subject: ErrorSubjectSummary[];
   by_error_type: Record<string, number>;
+}
+
+export interface KnowledgeStatusItem {
+  knowledge_point_id: number;
+  knowledge_point_name: string;
+  subject_id: number;
+  subject_name: string;
+  level: number;
+  status: string;
+  importance_score?: number | null;
+  last_updated_at: string;
+  is_manual_corrected: boolean;
+}
+
+export interface KnowledgeStatusResponse {
+  total: number;
+  by_status: Record<string, number>;
+  items: KnowledgeStatusItem[];
 }
 
 // --- Weekly Report (matches WeeklyReportOut) ---

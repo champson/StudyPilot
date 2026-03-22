@@ -25,9 +25,10 @@ const FILTER_OPTIONS: { value: ErrorFilter; label: string }[] = [
 
 function getStatusDisplay(e: ErrorBookItem): { label: string; color: string } {
   if (!e.is_explained) return { label: "未讲解", color: "text-text-secondary bg-gray-100" };
-  if (!e.is_recalled) return { label: "待召回", color: "text-error bg-error-light" };
   if (e.last_recall_result === "success") return { label: "召回成功", color: "text-success bg-success-light" };
-  return { label: "召回失败", color: "text-error bg-error-light" };
+  if (e.last_recall_result === "fail") return { label: "召回失败", color: "text-error bg-error-light" };
+  if (!e.is_recalled) return { label: "待召回", color: "text-error bg-error-light" };
+  return { label: "待召回", color: "text-error bg-error-light" };
 }
 
 export default function ErrorsPage() {
@@ -71,14 +72,17 @@ export default function ErrorsPage() {
       })
     : errors;
 
-  async function handleRecall(errorId: number, result: "correct" | "incorrect" | "partial" = "correct") {
+  async function startSinglePractice(error: ErrorBookItem) {
     try {
-      await api.post(`/student/errors/${errorId}/recall`, { result });
-      mutateErrors();
-      mutateSummary();
-      toast("召回练习完成", "success");
+      await api.post(`/student/errors/${error.id}/recall`);
+      setPracticeErrors([error]);
+      setCurrentPracticeIndex(0);
+      setPracticeResults({ mastered: 0, needsReview: 0 });
+      setPracticeComplete(false);
+      setPracticeMode(true);
+      setSelectedError(null);
     } catch {
-      toast("操作失败", "error");
+      toast("进入召回练习失败", "error");
     }
   }
 
@@ -90,7 +94,7 @@ export default function ErrorsPage() {
       const data = await api.get<{ items: ErrorBookItem[]; total: number }>(
         "/student/errors?is_recalled=false&page_size=50"
       );
-      const unrecalledErrors = data.items || [];
+      const unrecalledErrors = (data.items || []).slice(0, 20);
       
       if (unrecalledErrors.length === 0) {
         toast("没有待召回的错题", "info");
@@ -106,7 +110,7 @@ export default function ErrorsPage() {
       setPracticeResults({ mastered: 0, needsReview: 0 });
       setPracticeComplete(false);
       setPracticeMode(true);
-    } catch (err) {
+    } catch {
       toast("加载失败，请重试", "error");
     } finally {
       setPracticeLoading(false);
@@ -119,8 +123,8 @@ export default function ErrorsPage() {
     if (!currentError) return;
 
     try {
-      await api.post(`/student/errors/${currentError.id}/recall`, {
-        result: mastered ? "correct" : "incorrect"
+      await api.post(`/student/errors/${currentError.id}/recall-result`, {
+        result: mastered ? "success" : "fail"
       });
       
       setPracticeResults(prev => ({
@@ -392,12 +396,14 @@ export default function ErrorsPage() {
                   <div className="flex items-center gap-2 pt-3 border-t border-border-light">
                     <p className="text-xs text-text-tertiary flex-1">入库时间：{new Date(error.created_at).toLocaleDateString("zh-CN")}</p>
                     <Button variant="outline" size="sm" onClick={() => setSelectedError(error)}>查看详情</Button>
-                    {!error.is_recalled && (
-                      <div className="flex items-center gap-1">
-                        <Button variant="primary" size="sm" onClick={() => handleRecall(error.id, "correct")}>已掌握</Button>
-                        <Button variant="outline" size="sm" onClick={() => handleRecall(error.id, "partial")}>部分掌握</Button>
-                        <Button variant="outline" size="sm" onClick={() => handleRecall(error.id, "incorrect")}>未掌握</Button>
-                      </div>
+                    {error.last_recall_result !== "success" && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => startSinglePractice(error)}
+                      >
+                        {error.last_recall_result === "fail" ? "再次召回" : "开始召回"}
+                      </Button>
                     )}
                   </div>
                 </Card>
@@ -423,18 +429,17 @@ export default function ErrorsPage() {
           size="lg"
           footer={
             <div className="flex justify-end gap-2">
-              {selectedError && !selectedError.is_recalled && (
+              {selectedError && selectedError.last_recall_result !== "success" && (
                 <Button
                   variant="primary"
                   size="sm"
                   onClick={() => {
                     if (selectedError) {
-                      handleRecall(selectedError.id, "correct");
-                      setSelectedError(null);
+                      startSinglePractice(selectedError);
                     }
                   }}
                 >
-                  触发召回
+                  开始召回
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={() => setSelectedError(null)}>
@@ -496,7 +501,7 @@ export default function ErrorsPage() {
                     </p>
                   ) : (
                     <p className="text-sm text-text-tertiary">
-                      此题尚未进行 AI 讲解。点击「触发召回」开始学习。
+                      此题尚未进行 AI 讲解。点击「开始召回」进入练习流程。
                     </p>
                   )}
                 </div>

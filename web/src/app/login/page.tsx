@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
@@ -9,33 +9,40 @@ import { loginWithToken, loginAdmin, saveAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import type { AuthResponse } from "@/types/api";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const [role, setRole] = useState<"student" | "parent" | "admin">("student");
   const [token, setToken] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTo = searchParams.get("redirect");
   const { toast } = useToast();
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
+
+    if (role === "admin") {
+      if (!username || !password) {
+        toast("请填写用户名和密码", "error");
+        return;
+      }
+    } else {
+      if (!token) {
+        toast("请输入登录令牌", "error");
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
       if (role === "admin") {
-        if (!username || !password) {
-          toast("请填写用户名和密码", "error");
-          return;
-        }
         const res = await loginAdmin(username, password);
         saveAuth(res);
-        router.push("/admin/dashboard");
+        router.push(redirectTo?.startsWith("/admin") ? redirectTo : "/admin/dashboard");
       } else {
-        if (!token) {
-          toast("请输入登录令牌", "error");
-          return;
-        }
         const res = await loginWithToken(token, role);
         saveAuth(res);
         if (role === "student") {
@@ -59,14 +66,14 @@ export default function LoginPage() {
                 router.push("/onboarding");
               } else {
                 localStorage.setItem("onboarding_completed", "true");
-                router.push("/dashboard");
+                router.push(redirectTo || "/dashboard");
               }
             } catch {
               router.push("/onboarding");
             }
           }
         } else {
-          router.push("/parent/report/weekly");
+          router.push(redirectTo?.startsWith("/parent") ? redirectTo : "/parent/report/weekly");
         }
       }
     } catch (err) {
@@ -157,5 +164,13 @@ export default function LoginPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-bg" />}>
+      <LoginPageContent />
+    </Suspense>
   );
 }

@@ -1,4 +1,12 @@
+import warnings
+
 from pydantic_settings import BaseSettings
+
+_INSECURE_DEFAULTS = {
+    "JWT_SECRET_KEY": "change-me-to-a-random-secret",
+    "SHARE_TOKEN_SECRET": "change-me-share-secret",
+    "ADMIN_PASSWORD": "changeme",
+}
 
 
 class Settings(BaseSettings):
@@ -30,5 +38,15 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
+    def warn_insecure_defaults(self) -> None:
+        for field, default_value in _INSECURE_DEFAULTS.items():
+            if getattr(self, field) == default_value:
+                warnings.warn(
+                    f"SECURITY: {field} is using its default value. "
+                    f"Set {field} in environment or .env before deploying.",
+                    stacklevel=2,
+                )
+
 
 settings = Settings()
+settings.warn_insecure_defaults()

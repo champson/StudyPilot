@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { getSubjectId } from "@/lib/subjects";
 import { useQAHistory } from "@/lib/hooks";
+import { api } from "@/lib/api";
 import { streamRequest } from "@/lib/stream";
 import type { QAMessage, Subject } from "@/types/api";
 
@@ -46,6 +47,57 @@ export default function QAPage() {
 
   const { data: qaHistoryData } = useQAHistory(1, 20);
   const qaHistory = qaHistoryData?.items || [];
+
+  const loadSession = useCallback(async (id: number) => {
+    try {
+      const detail = await api.get<{ id: number; messages: QAMessage[] }>(`/student/qa/sessions/${id}`);
+      setSessionId(id);
+      const loaded: QAMessage[] = (detail.messages || []).map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        created_at: m.created_at,
+        knowledge_points: m.knowledge_points,
+        tutoring_strategy: m.tutoring_strategy,
+      }));
+      setMessages((prev) => loaded.length > 0 ? loaded : prev);
+      setShowHistory(false);
+    } catch {
+      toast("加载会话失败", "error");
+    }
+  }, [toast]);
+
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || sending || streaming) return;
+
+    const previewUrl = URL.createObjectURL(file);
+    const userMsg: QAMessage = {
+      id: Date.now(),
+      role: "user",
+      content: "[上传图片]",
+      created_at: new Date().toISOString(),
+      attachments: [previewUrl],
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setSending(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("upload_type", "homework");
+    if (subject) formData.append("subject_id", String(getSubjectId(subject)));
+
+    try {
+      await api.post("/student/material/upload", formData);
+      toast("图片已上传，可以针对图片提问", "success");
+    } catch {
+      toast("图片上传失败", "error");
+    } finally {
+      URL.revokeObjectURL(previewUrl);
+      setSending(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }, [sending, streaming, subject, toast]);
 
   // 长列表优化：超过阈值时只渲染最近的消息
   const visibleMessages = useMemo(() => {
@@ -128,10 +180,6 @@ export default function QAPage() {
             (event.session_id || event.data)
           ) {
             setSessionId(event.session_id ?? event.data);
-          } else if (event.type === "session_created" && event.session_id) {
-            setSessionId(event.session_id);
-          } else if (event.type === "session_id" && event.data) {
-            setSessionId(event.data);
           }
         } catch { /* ignore non-JSON lines */ }
       },
@@ -187,7 +235,7 @@ export default function QAPage() {
               <button
                 key={s.id}
                 className="w-full text-left p-3 rounded-lg hover:bg-gray-50 mb-1 transition-colors"
-                onClick={() => setShowHistory(false)}
+                onClick={() => loadSession(s.id)}
               >
                 <p className="text-sm font-medium">会话 #{s.id}</p>
                 <p className="text-xs text-text-tertiary">{s.message_count}条消息 · {new Date(s.created_at).toLocaleDateString("zh-CN")}</p>
@@ -299,7 +347,7 @@ export default function QAPage() {
           >
             📷
           </button>
-          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" />
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
 
           <textarea
             value={input}

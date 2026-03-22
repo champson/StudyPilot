@@ -21,13 +21,18 @@ OCR_MAX_RETRIES = 3
 OCR_BASE_RETRY_DELAY = 60  # seconds
 
 
-async def _resolve_admin_user_id() -> int | None:
-    async with async_session_factory() as db:
-        result = await db.execute(
+async def _resolve_admin_user_id(db: AsyncSession | None = None) -> int | None:
+    async def _query(session: AsyncSession) -> int | None:
+        result = await session.execute(
             select(User).where(User.role == "admin").order_by(User.id.asc())
         )
         admin = result.scalar_one_or_none()
         return admin.id if admin else None
+
+    if db is not None:
+        return await _query(db)
+    async with async_session_factory() as new_db:
+        return await _query(new_db)
 
 
 async def _mark_processing(upload_id: int) -> StudyUpload | None:
@@ -98,7 +103,7 @@ async def _mark_failed(
     upload.ocr_status = "failed"
     upload.ocr_error = error_message
 
-    admin_user_id = await _resolve_admin_user_id()
+    admin_user_id = await _resolve_admin_user_id(db)
     if admin_user_id is not None:
         db.add(
             ManualCorrection(
@@ -201,10 +206,24 @@ def process_ocr(self, upload_id: int):
                 upload = result.scalar_one_or_none()
                 if upload is None:
                     return
-                # Mark as 'ocr_failed' instead of just 'failed'
-                upload.ocr_status = "ocr_failed"
+                upload.ocr_status = "failed"
                 upload.ocr_error = error_message
-                await _mark_failed(db, upload, error_message)
+
+                admin_user_id = await _resolve_admin_user_id()
+                if admin_user_id is not None:
+                    db.add(
+                        ManualCorrection(
+                            target_type="ocr",
+                            target_id=upload.id,
+                            original_content=upload.ocr_result,
+                            corrected_content={
+                                "requires_manual_review": True,
+                                "error": error_message,
+                            },
+                            correction_reason="ocr_failed_after_retries",
+                            corrected_by=admin_user_id,
+                        )
+                    )
                 await db.commit()
 
         asyncio.run(_finalize_failure())

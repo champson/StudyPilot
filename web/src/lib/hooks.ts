@@ -6,6 +6,7 @@ import type {
   QASession,
   ErrorBookItem,
   ErrorSummary,
+  KnowledgeStatusResponse,
   WeeklyReport,
   ParentWeeklyReport,
   SystemMetrics,
@@ -77,13 +78,15 @@ export function useErrorSummary() {
 }
 
 export function useKnowledgeStatus() {
-  return useSWR("/student/knowledge/status", fetcher);
+  return useSWR<KnowledgeStatusResponse>("/student/knowledge/status", fetcher);
 }
 
-export function useWeeklyReport(week?: string) {
-  const path = week
-    ? `/student/report/weekly?week=${week}`
-    : "/student/report/weekly";
+export function useWeeklyReport(week?: string | null) {
+  const path = week === null
+    ? null
+    : week
+      ? `/student/report/weekly?week=${week}`
+      : "/student/report/weekly";
   return useSWR<WeeklyReport>(path, fetcher);
 }
 
@@ -93,10 +96,12 @@ export function useWeeklyReportSummary() {
 
 // === Parent ===
 
-export function useParentWeeklyReport(week?: string) {
-  const path = week
-    ? `/parent/report/weekly?week=${week}`
-    : "/parent/report/weekly";
+export function useParentWeeklyReport(week?: string | null) {
+  const path = week === null
+    ? null
+    : week
+      ? `/parent/report/weekly?week=${week}`
+      : "/parent/report/weekly";
   return useSWR<ParentWeeklyReport>(path, fetcher);
 }
 
