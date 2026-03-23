@@ -8,16 +8,6 @@ export interface SuccessResponse<T> {
   meta?: { request_id?: string; server_time?: string };
 }
 
-export interface PaginatedResponse<T> {
-  data: {
-    items: T[];
-    page: number;
-    page_size: number;
-    total: number;
-    total_pages: number;
-  };
-}
-
 export interface ErrorResponse {
   error: {
     code: string;
@@ -27,15 +17,6 @@ export interface ErrorResponse {
 }
 
 // --- Auth ---
-export interface LoginRequest {
-  token: string;
-  role: "student" | "parent";
-}
-
-export interface AdminLoginRequest {
-  username: string;
-  password: string;
-}
 
 export interface AuthUser {
   id: number;
@@ -57,31 +38,6 @@ export type RefreshTokenResponse = AuthResponse;
 export type Grade = "高一" | "高二" | "高三";
 export type Subject = "语文" | "数学" | "英语" | "物理" | "化学" | "地理" | "政治" | "生物" | "历史";
 export type ExamType = "周测" | "月考" | "期中" | "期末";
-
-export interface StudentProfile {
-  id: number;
-  user_id: number;
-  grade: Grade;
-  textbook_version: string;
-  class_rank?: number;
-  grade_rank?: number;
-  class_total?: number;
-  grade_total?: number;
-  subject_combination: Subject[];
-  onboarding_completed: boolean;
-  created_at: string;
-}
-
-export interface OnboardingData {
-  grade: Grade;
-  textbook_version: string;
-  class_rank?: number;
-  grade_rank?: number;
-  class_total?: number;
-  grade_total?: number;
-  subject_combination: Subject[];
-  exam_schedules?: ExamSchedule[];
-}
 
 export interface ExamSchedule {
   id?: number;
@@ -154,19 +110,6 @@ export interface QASession {
   message_count: number;
 }
 
-export interface QASessionDetail {
-  id: number;
-  student_id: number;
-  session_date: string;
-  task_id: number | null;
-  subject_id: number | null;
-  status: string;
-  structured_summary: Record<string, unknown> | null;
-  created_at: string;
-  closed_at: string | null;
-  messages: QAMessage[];
-}
-
 export interface QAMessage {
   id: number;
   session_id?: number;
@@ -179,14 +122,7 @@ export interface QAMessage {
   created_at: string;
 }
 
-export interface ChatResponse {
-  session_id: number;
-  user_message: QAMessage;
-  assistant_message: QAMessage;
-}
-
 // --- Error Book (matches ErrorBookOut / ErrorSummaryOut) ---
-export type ErrorType = "计算错误" | "概念不清" | "粗心" | "不会";
 export type EntryReason = "wrong" | "not_know" | "repeated_wrong";
 
 export interface ErrorBookItem {
@@ -343,7 +279,7 @@ export interface CorrectionItem {
   original_content: Record<string, unknown> | null;
   corrected_content: Record<string, unknown>;
   correction_reason: string | null;
-  corrected_by: number;
+  corrected_by: number | null;
   status: CorrectionStatus;
   created_at: string;
 }

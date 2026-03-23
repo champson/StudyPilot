@@ -27,7 +27,6 @@ function getStatusDisplay(e: ErrorBookItem): { label: string; color: string } {
   if (!e.is_explained) return { label: "未讲解", color: "text-text-secondary bg-gray-100" };
   if (e.last_recall_result === "success") return { label: "召回成功", color: "text-success bg-success-light" };
   if (e.last_recall_result === "fail") return { label: "召回失败", color: "text-error bg-error-light" };
-  if (!e.is_recalled) return { label: "待召回", color: "text-error bg-error-light" };
   return { label: "待召回", color: "text-error bg-error-light" };
 }
 

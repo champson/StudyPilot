@@ -7,6 +7,13 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import AppError
 from app.models.knowledge import KnowledgeTree, StudentKnowledgeStatus
+from app.services.knowledge import (
+    BASICALLY_MASTERED,
+    INITIAL_CONTACT,
+    NEEDS_CONSOLIDATION,
+    NOT_OBSERVED,
+    REPEATED_MISTAKES,
+)
 from app.models.plan import DailyPlan
 from app.models.qa import QaSession
 from app.models.student_profile import StudentProfile
@@ -261,7 +268,10 @@ async def resolve_correction(
             upload.ocr_status = "completed"
             upload.is_manual_corrected = True
     elif correction.target_type == "knowledge":
-        valid_knowledge_statuses = {"未观察", "初步接触", "需要巩固", "基本掌握", "反复失误"}
+        valid_knowledge_statuses = {
+            NOT_OBSERVED, INITIAL_CONTACT, NEEDS_CONSOLIDATION,
+            BASICALLY_MASTERED, REPEATED_MISTAKES,
+        }
         original = correction.original_content or {}
         sid = original.get("student_id")
         kpid = original.get("knowledge_point_id")

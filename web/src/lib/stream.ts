@@ -4,7 +4,7 @@ import { env } from "./env";
 /** Default timeout for stream requests (longer than regular requests) */
 const DEFAULT_STREAM_TIMEOUT = 60000; // 60 seconds
 
-export interface StreamOptions {
+interface StreamOptions {
   onMessage?: (data: string) => void;
   onError?: (error: Error) => void;
   onDone?: () => void;

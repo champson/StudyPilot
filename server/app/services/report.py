@@ -1,4 +1,3 @@
-import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -9,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.exceptions import AppError
+from app.core.logging import get_logger
 from app.models.error_book import ErrorBook
 from app.models.knowledge import KnowledgeTree, StudentKnowledgeStatus
 from app.models.plan import DailyPlan
@@ -295,7 +295,7 @@ async def generate_weekly_reports(
         try:
             reports.append(await upsert_weekly_report(db, student_id, report_week))
         except Exception:
-            logging.getLogger(__name__).warning(
+            get_logger(__name__).warning(
                 "Failed to generate weekly report for student %s", student_id, exc_info=True
             )
     return reports

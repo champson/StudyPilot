@@ -3,7 +3,7 @@
 
 import type { Subject } from "@/types/api";
 
-export interface SubjectInfo {
+interface SubjectInfo {
   name: Subject;
   icon: string;
 }

@@ -50,7 +50,6 @@ const STUDENT_REFRESH_THRESHOLD_DAYS = 7;
 const ADMIN_REFRESH_THRESHOLD_HOURS = 2;
 
 // --- Anti-concurrent refresh lock ---
-let isRefreshing = false;
 let refreshPromise: Promise<string | null> | null = null;
 
 class ApiError extends Error {
@@ -91,7 +90,7 @@ function decodeJWTPayload(token: string): { sub: string; role: string; exp: numb
 /**
  * Get token expiry timestamp (Unix seconds)
  */
-export function getTokenExpiry(token: string): number | null {
+function getTokenExpiry(token: string): number | null {
   const payload = decodeJWTPayload(token);
   return payload?.exp ?? null;
 }
@@ -177,7 +176,6 @@ async function tryRefreshToken(): Promise<string | null> {
       // Network error or other failure, silently ignore
       return null;
     } finally {
-      isRefreshing = false;
       refreshPromise = null;
     }
   })();

@@ -1,5 +1,4 @@
 import json
-import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import AppError
+from app.core.logging import get_logger
 from app.llm.agents.assessment import assess_session
 from app.llm.agents.routing import classify_intent
 from app.llm.agents.tutoring import (
@@ -25,7 +25,7 @@ from app.models.subject import Subject
 from app.models.system import ManualCorrection
 from app.services.knowledge import apply_assessment_results, resolve_knowledge_points_by_names
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SESSION_REUSE_MINUTES = 30
 

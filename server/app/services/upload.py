@@ -1,5 +1,4 @@
 import hashlib
-import logging
 import os
 
 from fastapi import UploadFile
@@ -8,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import AppError
+from app.core.logging import get_logger
 from app.models.upload import StudyUpload
 from app.tasks.ocr import process_ocr, run_ocr_pipeline_inline
 
@@ -161,6 +161,6 @@ async def _dispatch_ocr_task(
         else:
             process_ocr.delay(upload_id)
     except Exception:
-        logging.getLogger(__name__).warning(
+        get_logger(__name__).warning(
             "OCR dispatch failed for upload_id=%s, keeping pending status", upload_id, exc_info=True
         )

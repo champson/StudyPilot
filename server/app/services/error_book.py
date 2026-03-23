@@ -10,6 +10,13 @@ from app.models.error_book import ErrorBook
 from app.models.knowledge import KnowledgeTree, StudentKnowledgeStatus
 from app.models.subject import Subject
 from app.services import knowledge as knowledge_svc
+from app.services.knowledge import (
+    BASICALLY_MASTERED,
+    INITIAL_CONTACT,
+    NEEDS_CONSOLIDATION,
+    NOT_OBSERVED,
+    REPEATED_MISTAKES,
+)
 
 
 async def list_errors(
@@ -193,12 +200,12 @@ async def batch_recall(
 
 # 状态权重映射表
 STATUS_WEIGHT_MAP = {
-    "反复失误": 50,
-    "需要巩固": 30,
-    "初步接触": 20,
-    "基本掌握": 0,
+    REPEATED_MISTAKES: 50,
+    NEEDS_CONSOLIDATION: 30,
+    INITIAL_CONTACT: 20,
+    BASICALLY_MASTERED: 0,
     "完全掌握": 0,
-    "未观察": 10,
+    NOT_OBSERVED: 10,
 }
 
 # 召回批次默认限制

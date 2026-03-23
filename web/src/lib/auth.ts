@@ -4,7 +4,7 @@ import type { AuthResponse, AuthUser } from "@/types/api";
 // Cookie max-age in seconds (30 days, matching backend token expiry)
 const TOKEN_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 
-export interface StoredAuth {
+interface StoredAuth {
   token: string;
   role: "student" | "parent" | "admin";
   userName: string;
@@ -27,7 +27,7 @@ export function setTokenCookie(token: string, maxAge: number = TOKEN_COOKIE_MAX_
 /**
  * Clear access_token cookie
  */
-export function clearTokenCookie(): void {
+function clearTokenCookie(): void {
   if (typeof document === "undefined") return;
   document.cookie = "access_token=;path=/;max-age=0;SameSite=Lax";
 }
@@ -35,7 +35,7 @@ export function clearTokenCookie(): void {
 /**
  * Get token from cookie
  */
-export function getTokenFromCookie(): string | null {
+function getTokenFromCookie(): string | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]*)/);
   return match ? match[1] : null;
@@ -45,7 +45,7 @@ export function getTokenFromCookie(): string | null {
  * Migrate token from localStorage to cookie if needed.
  * Called on app initialization to ensure middleware can read the token.
  */
-export function migrateTokenToCookie(): void {
+function migrateTokenToCookie(): void {
   if (typeof window === "undefined") return;
   
   const cookieToken = getTokenFromCookie();
@@ -110,8 +110,4 @@ export async function loginAdmin(
   password: string
 ): Promise<AuthResponse> {
   return api.post<AuthResponse>("/auth/admin-login", { username, password });
-}
-
-export async function fetchCurrentUser(): Promise<AuthUser> {
-  return api.get<AuthUser>("/auth/me");
 }

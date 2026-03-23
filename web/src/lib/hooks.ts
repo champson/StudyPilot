@@ -34,24 +34,9 @@ export function useRecentUploads(page = 1, pageSize = 3) {
   );
 }
 
-export function useUploadOcrStatus(uploadId: number | null) {
-  return useSWR(
-    uploadId ? `/student/material/${uploadId}/ocr-status` : null,
-    fetcher,
-    { refreshInterval: 3000 }
-  );
-}
-
 export function useQAHistory(page = 1, pageSize = 10) {
   return useSWR<{ items: QASession[]; total: number }>(
     `/student/qa/history?page=${page}&page_size=${pageSize}`,
-    fetcher
-  );
-}
-
-export function useSessionDetail(sessionId: number | null) {
-  return useSWR(
-    sessionId ? `/student/qa/sessions/${sessionId}` : null,
     fetcher
   );
 }
@@ -77,10 +62,6 @@ export function useErrorSummary() {
   return useSWR<ErrorSummary>("/student/errors/summary", fetcher);
 }
 
-export function useKnowledgeStatus() {
-  return useSWR<KnowledgeStatusResponse>("/student/knowledge/status", fetcher);
-}
-
 export function useWeeklyReport(week?: string | null) {
   const path = week === null
     ? null
@@ -88,10 +69,6 @@ export function useWeeklyReport(week?: string | null) {
       ? `/student/report/weekly?week=${week}`
       : "/student/report/weekly";
   return useSWR<WeeklyReport>(path, fetcher);
-}
-
-export function useWeeklyReportSummary() {
-  return useSWR("/student/report/weekly/summary", fetcher);
 }
 
 // === Parent ===
@@ -103,14 +80,6 @@ export function useParentWeeklyReport(week?: string | null) {
       ? `/parent/report/weekly?week=${week}`
       : "/parent/report/weekly";
   return useSWR<ParentWeeklyReport>(path, fetcher);
-}
-
-export function useParentRisk() {
-  return useSWR("/parent/profile/risk", fetcher);
-}
-
-export function useParentTrend() {
-  return useSWR("/parent/profile/trend", fetcher);
 }
 
 // === Admin ===

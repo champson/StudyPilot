@@ -8,7 +8,7 @@ export function formatDate(dateStr: string): string {
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
-export function formatTime(dateStr: string): string {
+function formatTime(dateStr: string): string {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return "";
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
